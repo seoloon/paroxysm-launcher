@@ -30,20 +30,26 @@ contextBridge.exposeInMainWorld('px', {
     login:   () => ipcRenderer.invoke('auth:login'),
     logout:  () => ipcRenderer.invoke('auth:logout'),
   },
-
   library: {
     list:   ()   => ipcRenderer.invoke('library:list'),
     get:    id   => ipcRenderer.invoke('library:get', id),
     delete: id   => ipcRenderer.invoke('library:delete', id),
   },
   modpack: {
-    pickFile: ()    => ipcRenderer.invoke('modpack:pick-file'),
-    import:   path  => ipcRenderer.invoke('modpack:import', path),
+    pickFile:     ()    => ipcRenderer.invoke('modpack:pick-file'),
+    import:       path  => ipcRenderer.invoke('modpack:import', path),
+    resolveNames: id    => ipcRenderer.invoke('modpack:resolve-names', id),
   },
   game: {
     launch: id => ipcRenderer.invoke('game:launch', id),
   },
   shell: { open: p => ipcRenderer.invoke('shell:open', p) },
+  modrinth: {
+    search:      (params) => ipcRenderer.invoke('modrinth:search', params),
+    getProject:  (id)     => ipcRenderer.invoke('modrinth:get-project', id),
+    getVersions: (id)     => ipcRenderer.invoke('modrinth:get-versions', id),
+    download:    (params) => ipcRenderer.invoke('modrinth:download', params),
+  },
   app:   { version: () => ipcRenderer.invoke('app:version') },
   on,
   off,

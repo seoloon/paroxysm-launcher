@@ -52,10 +52,203 @@ ipcMain.on('win:minimize', () => mainWindow?.minimize());
 ipcMain.on('win:maximize', () => mainWindow?.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize());
 ipcMain.on('win:close',    () => mainWindow?.close());
 
-ipcMain.handle('config:get', (_, key)        => store.get(key));
+// config:get handled below (with instance file scanning support)
 ipcMain.handle('config:set', (_, key, value) => { store.set(key, value); return true; });
 ipcMain.handle('app:version', () => app.getVersion());
+
+// ── Instance file listing (for play panel "Contenu" tab) ──────────────────────
+ipcMain.handle('config:get', (_, key) => {
+  // Special key: scan instance files with name resolution from manifest
+  if (key && key.startsWith('__instanceFiles__:')) {
+    const packId = key.slice('__instanceFiles__:'.length);
+    const entry  = library.get(packId);
+    if (!entry?.gameDir) return [];
+    try {
+      const fs   = require('fs');
+      const path = require('path');
+
+      // Load the manifest (filename → { displayName, projectID, fileID })
+      const manifestPath = path.join(entry.gameDir, 'mods-manifest.json');
+      let manifest = {};
+      try {
+        if (fs.existsSync(manifestPath))
+          manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      } catch {}
+
+      const results = [];
+      const scanDirs = [
+        { dir: 'mods',          type: 'mod' },
+        { dir: 'shaderpacks',   type: 'shader' },
+        { dir: 'resourcepacks', type: 'resourcepack' },
+        { dir: 'config',        type: 'config' },
+      ];
+      for (const { dir, type } of scanDirs) {
+        const full = path.join(entry.gameDir, dir);
+        if (!fs.existsSync(full)) continue;
+        const items = fs.readdirSync(full, { withFileTypes: true });
+        for (const item of items) {
+          if (!item.isFile()) continue;
+          const filePath = path.join(full, item.name);
+          let size = 0;
+          try { size = fs.statSync(filePath).size; } catch {}
+
+          // Résoudre le nom d'affichage :
+          // 1. Manifeste (nom du mod CurseForge)
+          // 2. Nom du fichier tel quel (Modrinth / override files sont déjà lisibles)
+          const manifestEntry = manifest[item.name];
+          const displayName   = manifestEntry?.displayName || cleanFilename(item.name);
+
+          results.push({
+            name:        displayName,   // nom affiché
+            filename:    item.name,     // nom réel du fichier
+            type,
+            size,
+            dir,
+            projectID:   manifestEntry?.projectID,
+            fileID:      manifestEntry?.fileID,
+          });
+        }
+      }
+      return results.sort((a, b) => a.name.localeCompare(b.name));
+    } catch (e) {
+      return [];
+    }
+  }
+  // Normal config key
+  return store.get(key);
+});
+
+// Nettoyer un nom de fichier en nom lisible
+// Ex: "sodium-fabric-0.5.8+mc1.20.1.jar" → "sodium-fabric 0.5.8"
+// Ex: "123456-789012.jar" → "123456-789012" (inchangé si non résolu)
+function cleanFilename(filename) {
+  return filename
+    .replace(/\.jar$/i, '')
+    .replace(/[-_]forge[-_]/gi, ' ')
+    .replace(/[-_]fabric[-_]/gi, ' ')
+    .replace(/[+]mc[\d.]+/g, '')   // retire +mc1.20.1
+    .replace(/[-_]\d+\.\d+[\d._-]*/g, (m) => ' ' + m.replace(/^[-_]/, ''))
+    .replace(/[-_]+/g, ' ')
+    .trim();
+}
 ipcMain.handle('shell:open',  (_, p) => shell.openPath(p));
+
+// ── Resolve CurseForge mod names for existing instances ──────────────────────
+// Called from the "Contenu" tab when files still have numeric names
+ipcMain.handle('modpack:resolve-names', async (_, packId) => {
+  const entry = library.get(packId);
+  if (!entry?.gameDir) return { ok: false };
+  try {
+    const fs   = require('fs');
+    const path = require('path');
+
+    const modsDir     = path.join(entry.gameDir, 'mods');
+    const manifestPath = path.join(entry.gameDir, 'mods-manifest.json');
+    let manifest = {};
+    try {
+      if (fs.existsSync(manifestPath))
+        manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    } catch {}
+
+    if (!fs.existsSync(modsDir)) return { ok: true, resolved: 0 };
+
+    // Find files matching the pattern projectID-fileID.jar (numeric IDs)
+    const numericPattern = /^(\d+)-(\d+)\.jar$/;
+    const files = fs.readdirSync(modsDir).filter(f => numericPattern.test(f) && !manifest[f]?.displayName);
+
+    let resolved = 0;
+    const fetch = require('node-fetch');
+    const HEADERS = { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' };
+
+    // Batch resolve: 5 at a time to avoid rate limiting
+    for (let i = 0; i < files.length; i += 5) {
+      const chunk = files.slice(i, i + 5);
+      await Promise.allSettled(chunk.map(async (filename) => {
+        const m = filename.match(numericPattern);
+        if (!m) return;
+        const [, projectID, fileID] = m;
+        try {
+          const res = await fetch(`https://www.curseforge.com/api/v1/mods/${projectID}`, {
+            headers: HEADERS, timeout: 8000
+          });
+          if (!res.ok) return;
+          const data = await res.json();
+          const name = data?.data?.name || data?.name;
+          if (name) {
+            manifest[filename] = { displayName: name, projectID: +projectID, fileID: +fileID };
+            resolved++;
+          }
+        } catch {}
+      }));
+      await new Promise(r => setTimeout(r, 150));
+    }
+
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    return { ok: true, resolved };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// ── Modrinth Browse API ───────────────────────────────────────────────────────
+const MODRINTH_API = 'https://api.modrinth.com/v2';
+const MODRINTH_HEADERS = {
+  'User-Agent': 'PaROXYSM-Launcher/1.0 (contact@paroxysm.dev)',
+  'Accept': 'application/json',
+};
+
+async function modrinthFetch(url) {
+  const https = require('follow-redirects').https;
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: MODRINTH_HEADERS, maxRedirects: 5, timeout: 15000 }, (res) => {
+      let data = '';
+      res.on('data', d => { data += d; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); }
+        catch (e) { reject(new Error('Invalid JSON from Modrinth')); }
+      });
+    }).on('error', reject);
+  });
+}
+
+ipcMain.handle('modrinth:search', async (_, { query='', type='modpack', offset=0, limit=20, gameVersion='', categories=[] }) => {
+  try {
+    const facets = [['project_type:'+type]];
+    if (gameVersion) facets.push(['versions:'+gameVersion]);
+    if (categories.length) facets.push(categories.map(c => 'categories:'+c));
+    const params = new URLSearchParams({
+      query, offset, limit,
+      facets: JSON.stringify(facets),
+      index: 'relevance',
+    });
+    return await modrinthFetch(`${MODRINTH_API}/search?${params}`);
+  } catch(e) { return { error: e.message, hits: [] }; }
+});
+
+ipcMain.handle('modrinth:get-project', async (_, id) => {
+  try { return await modrinthFetch(`${MODRINTH_API}/project/${id}`); }
+  catch(e) { return { error: e.message }; }
+});
+
+ipcMain.handle('modrinth:get-versions', async (_, id) => {
+  try { return await modrinthFetch(`${MODRINTH_API}/project/${id}/version`); }
+  catch(e) { return { error: e.message }; }
+});
+
+ipcMain.handle('modrinth:download', async (_, { projectId, versionId, fileName, destDir }) => {
+  try {
+    const versions = await modrinthFetch(`${MODRINTH_API}/version/${versionId}`);
+    const file = versions.files?.find(f => f.primary) || versions.files?.[0];
+    if (!file) throw new Error('Aucun fichier trouvé pour cette version');
+    const { downloadFile } = require('./core/utils/download');
+    const path = require('path');
+    const fs   = require('fs');
+    fs.mkdirSync(destDir, { recursive: true });
+    const dest = path.join(destDir, file.filename);
+    await downloadFile(file.url, dest, () => {});
+    return { ok: true, path: dest, filename: file.filename };
+  } catch(e) { return { ok: false, error: e.message }; }
+});
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 ipcMain.handle('auth:status', async () => {

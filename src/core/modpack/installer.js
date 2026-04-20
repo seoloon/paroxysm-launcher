@@ -1,24 +1,4 @@
 'use strict';
-/**
- * ModpackInstaller — v3
- *
- * Stratégie de téléchargement CurseForge (par ordre) :
- *
- *  1. API officielle avec clé (si configurée par l'utilisateur dans Paramètres)
- *     → URLs directes signées, noms de fichiers corrects
- *
- *  2. Endpoint web public CurseForge (SANS clé, toujours accessible)
- *     https://www.curseforge.com/api/v1/mods/{projectID}/files/{fileID}/download
- *     → Redirige vers le vrai fichier. Fonctionne pour tous les mods
- *        dont la distribution est autorisée.
- *
- *  3. CDN edge (fallback, peut 403 sur certains mods restreints)
- *     https://edge.forgecdn.net/files/{AAAA}/{BBB}/{fileID}
- *
- * Mods "distribution disabled" (ex: OptiFine) : certains auteurs désactivent
- * la redistribution automatique. Ceux-là doivent être téléchargés manuellement
- * depuis CurseForge.com et placés dans le dossier mods.
- */
 
 const fs    = require('fs');
 const path  = require('path');
@@ -28,7 +8,9 @@ const Store = require('../utils/store');
 
 const CF_API_BASE    = 'https://api.curseforge.com/v1';
 const CF_WEB_DL      = 'https://www.curseforge.com/api/v1/mods';
+const CF_WEB_API     = 'https://www.curseforge.com/api/v1/mods';  // pour résolution de noms
 const INSTANCES_BASE = path.join(Store.BASE_DIR, 'instances');
+const MANIFEST_FILE  = 'mods-manifest.json';  // filename → { displayName, projectID, fileID }
 
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -37,10 +19,33 @@ const HEADERS = {
 
 class ModpackInstaller {
   constructor(parsed, cfApiKey = null) {
-    this.parsed   = parsed;
-    this.cfApiKey = cfApiKey;
-    this.gameDir  = path.join(INSTANCES_BASE, sanitizeName(parsed.name));
-    this.modsDir  = path.join(this.gameDir, 'mods');
+    this.parsed      = parsed;
+    this.cfApiKey    = cfApiKey;
+    this.gameDir     = path.join(INSTANCES_BASE, sanitizeName(parsed.name));
+    this.modsDir     = path.join(this.gameDir, 'mods');
+    this.manifestPath = path.join(this.gameDir, MANIFEST_FILE);
+    this._manifest   = this._loadManifest();
+  }
+
+  _loadManifest() {
+    try {
+      if (fs.existsSync(this.manifestPath))
+        return JSON.parse(fs.readFileSync(this.manifestPath, 'utf8'));
+    } catch {}
+    return {};
+  }
+
+  _saveManifest() {
+    try {
+      fs.mkdirSync(this.gameDir, { recursive: true });
+      fs.writeFileSync(this.manifestPath, JSON.stringify(this._manifest, null, 2));
+    } catch (e) {
+      console.warn('[installer] Failed to save manifest:', e.message);
+    }
+  }
+
+  _addToManifest(filename, displayName, projectID, fileID) {
+    this._manifest[filename] = { displayName, projectID, fileID };
   }
 
   async downloadMods(onEach = () => {}) {
@@ -57,7 +62,15 @@ class ModpackInstaller {
       done++;
       const label = item.displayName || path.basename(item.dest);
       onEach(done, items.length, err ? `⚠ ${label}` : label);
+
+      // Enregistrer dans le manifeste si le téléchargement a réussi
+      if (!err && item.displayName) {
+        const filename = path.basename(item.dest);
+        this._addToManifest(filename, item.displayName, item.projectID, item.fileID);
+      }
     });
+
+    this._saveManifest();
     return failed;
   }
 
@@ -66,7 +79,7 @@ class ModpackInstaller {
     const files = this.parsed.files.filter(f => f.required !== false);
     if (!files.length) return [];
 
-    // Stratégie 1 : API officielle avec clé utilisateur
+    // Stratégie 1 : API officielle avec clé utilisateur (noms exacts)
     if (this.cfApiKey) {
       try {
         const items = await this._resolveViaCFAPI(files);
@@ -77,9 +90,42 @@ class ModpackInstaller {
       }
     }
 
-    // Stratégie 2 : endpoint web public (pas de clé requise)
-    console.log(`[installer] Utilisation endpoint web CurseForge (${files.length} mods)`);
-    return files.map(f => buildWebEndpointItem(f, this.modsDir));
+    // Stratégie 2 : endpoint web public — on essaie de résoudre les noms
+    // via l'API web CF publique (par chunks pour ne pas surcharger)
+    console.log(`[installer] Endpoint web CurseForge (${files.length} mods)`);
+    const items = files.map(f => buildWebEndpointItem(f, this.modsDir));
+
+    // Résolution des noms en arrière-plan (best-effort, non bloquant)
+    this._resolveNamesAsync(files).catch(() => {});
+
+    return items;
+  }
+
+  // Résoudre les noms de mods CurseForge via l'API publique (sans clé)
+  // URL: https://www.curseforge.com/api/v1/mods/{projectID}
+  async _resolveNamesAsync(files) {
+    // On traite par lots de 5 pour ne pas surcharger
+    for (const chunk of chunkArray(files, 5)) {
+      await Promise.allSettled(chunk.map(async (f) => {
+        try {
+          const res = await fetch(`${CF_WEB_API}/${f.projectID}`, {
+            headers: HEADERS,
+            timeout: 8000,
+          });
+          if (!res.ok) return;
+          const data = await res.json();
+          const modName = data?.data?.name || data?.name;
+          if (modName) {
+            const filename = `${f.projectID}-${f.fileID}.jar`;
+            this._addToManifest(filename, modName, f.projectID, f.fileID);
+          }
+        } catch {}
+      }));
+      // Petite pause pour ne pas être rate-limité
+      await new Promise(r => setTimeout(r, 200));
+    }
+    this._saveManifest();
+    console.log(`[installer] Noms résolus: ${Object.keys(this._manifest).length} entrées`);
   }
 
   // API officielle CurseForge (clé utilisateur requise)
@@ -105,10 +151,11 @@ class ModpackInstaller {
           results.push({
             url:         info.downloadUrl,
             dest:        path.join(this.modsDir, sanitizeFileName(info.fileName)),
-            displayName: info.fileName,
+            displayName: info.displayName || info.fileName,
+            projectID:   f.projectID,
+            fileID:      f.fileID,
           });
         } else {
-          // Mod restreint ou absent de l'API → fallback web endpoint
           results.push(buildWebEndpointItem(f, this.modsDir));
         }
       }
@@ -125,10 +172,12 @@ class ModpackInstaller {
         const rel = f.path
           ? f.path.replace(/^\/+/, '')
           : `mods/${decodeURIComponent(url.split('/').pop().split('?')[0])}`;
+        const filename = path.basename(rel);
+        // Le nom Modrinth est souvent déjà lisible dans le path
         return {
           url,
           dest:        path.join(this.gameDir, rel),
-          displayName: path.basename(rel),
+          displayName: filename,
           sha512:      f.sha512,
         };
       });
@@ -144,26 +193,20 @@ class ModpackInstaller {
     try { fs.rmSync(this.parsed.tmpDir, { recursive: true, force: true }); } catch {}
   }
 
-  getGameDir() { return this.gameDir; }
-  getModsDir() { return this.modsDir; }
+  getGameDir()      { return this.gameDir; }
+  getModsDir()      { return this.modsDir; }
+  getManifestPath() { return this.manifestPath; }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-/**
- * Construit un item de téléchargement via l'endpoint web public CurseForge.
- * Cet endpoint est public, ne requiert pas de clé API, et redirige vers
- * le vrai fichier. follow-redirects gère la redirection automatiquement.
- *
- * URL: https://www.curseforge.com/api/v1/mods/{projectID}/files/{fileID}/download
- */
 function buildWebEndpointItem(f, modsDir) {
   return {
     projectID:   f.projectID,
     fileID:      f.fileID,
     url:         `${CF_WEB_DL}/${f.projectID}/files/${f.fileID}/download`,
     dest:        path.join(modsDir, `${f.projectID}-${f.fileID}.jar`),
-    displayName: `${f.projectID}-${f.fileID}.jar`,
+    displayName: `${f.projectID}-${f.fileID}.jar`,  // sera mis à jour dans le manifeste
     headers:     HEADERS,
   };
 }
