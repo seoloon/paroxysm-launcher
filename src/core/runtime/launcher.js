@@ -46,7 +46,7 @@ class GameLauncher {
     // ── Build the "legacy classpath" that Forge's bootstraplauncher expects ───
     // This is only for JARs that bootstraplauncher loads itself (its ignoreList).
     // Forge's own JVM args contain the real -p / --add-modules for the rest.
-    const legacyClasspath = buildLegacyClasspath(merged.libraries, mcVersion, versionId);
+    const legacyClasspath = buildLegacyClasspath(merged.libraries, mcVersion, versionId, entry.modloader);
 
     // ── Auth ──────────────────────────────────────────────────────────────────
     const playerName  = offline ? (offlineName || 'Player') : (profile?.name || offlineName || 'Player');
@@ -124,13 +124,32 @@ class GameLauncher {
 
     const finalGameArgs = rawGameArgs.filter(a => a !== '--demo' && !a.includes('${'));
 
+    // --- 1. On détermine d'abord la version de Java ---
+    const javaVersion = detectJavaMajorVersion(javaPath);
+
+    // --- 2. On filtre les arguments (On crée la variable AVANT de l'utiliser) ---
+    const filteredJvmArgs = forgeJvmArgs.filter(arg => {
+      // Ces arguments font crash le jeu si Java est < 23 ou < 21
+      if (arg.startsWith('--sun-misc-unsafe-memory-access') && javaVersion < 23) return false;
+      if (arg.startsWith('--enable-native-access')          && javaVersion < 21) return false;
+      return true;
+    });
+
+    // --- 3. Maintenant on peut construire la ligne de commande complète ---
     const mainClass = loaderJson.mainClass || vanillaJson.mainClass;
-    if (!mainClass) throw new Error(`mainClass introuvable dans ${versionId}`);
+    if (!mainClass) throw new Error(`mainClass introuvable pour la version ${versionId}`);
 
-    // Full command: base perf flags + Forge's module system args + main class + game args
-    const fullArgs = [...baseJvmArgs, ...forgeJvmArgs, mainClass, ...finalGameArgs].filter(Boolean);
+    const fullArgs = [
+      ...baseJvmArgs,
+      ...filteredJvmArgs, // <--- Ici, la variable est maintenant bien définie !
+      mainClass,
+      ...finalGameArgs
+    ].filter(Boolean);
 
-    console.log('[launch] java:      ', javaPath);
+    // Petit log pour vérifier que tout est OK
+    console.log('[launch] java:', javaPath, `(v${javaVersion})`);
+
+    console.log('[launch] java:      ', javaPath, `(v${javaVersion})`);
     console.log('[launch] mainClass: ', mainClass);
     console.log('[launch] gameDir:   ', entry.gameDir);
     console.log('[launch] nativesDir:', nativesDir, `(${fs.readdirSync(nativesDir).length} files)`);
@@ -156,27 +175,19 @@ class GameLauncher {
 
 // ── buildLegacyClasspath ───────────────────────────────────────────────────────
 /**
- * Build the classpath for Forge's bootstraplauncher.
+ * Forge 1.17+ uses JPMS: minecraft.jar goes on the module path (-p), NOT -cp.
+ * Fabric uses a traditional classpath: minecraft.jar MUST be on -cp or Fabric
+ * throws "couldn't locate the game".
  *
- * Forge 1.17+ uses a two-phase loading system:
- *   1. bootstraplauncher runs on the traditional classpath (-cp)
- *   2. It then sets up the module path (-p) for Minecraft + Forge themselves
- *
- * The -cp entries are listed in Forge's version.json arguments.jvm as
- * the value of the -cp flag, already containing ${classpath}.
- * We resolve ${classpath} to the list of JARs that bootstraplauncher needs.
- *
- * These are typically: bootstraplauncher, asm, securejarhandler, and
- * a few other low-level JARs listed in the version.json libraries.
+ * The modloader parameter controls which behaviour to use.
  */
-function buildLegacyClasspath(libraries, mcVersion, versionId) {
-  const seen  = new Set();
-  const paths = [];
+function buildLegacyClasspath(libraries, mcVersion, versionId, modloader) {
+  const seen    = new Set();
+  const paths   = [];
+  const isForge = modloader === 'forge' || modloader === 'neoforge';
 
-  // These JARs must NEVER appear on -cp — Forge puts them on -p (module path)
-  // via its own JVM args. Adding them here too causes two modules exporting the
-  // same packages → "Modules minecraft and _1._20._1 export package X" crash.
-  const MODULE_PATH_ONLY = new Set([
+  // For Forge: these go on -p via Forge's own JVM args — exclude from -cp
+  const FORGE_MODULE_PATH_ONLY = new Set([
     'net.minecraft:client',
     'net.minecraft:minecraft',
     'net.minecraftforge:forge',
@@ -191,22 +202,25 @@ function buildLegacyClasspath(libraries, mcVersion, versionId) {
     const groupArt   = `${nameParts[0]}:${nameParts[1]}`;
     const classifier = nameParts[3] || '';
 
-    // Skip natives — extracted to nativesDir, not on classpath
+    // Natives go to nativesDir via extractNatives(), NOT on the classpath
     if (classifier.startsWith('natives-')) continue;
 
-    // Skip JARs that belong only on the module path
-    if (MODULE_PATH_ONLY.has(groupArt)) continue;
+    // For Forge: these are placed on -p (module path) by Forge's own JVM args
+    if (isForge && FORGE_MODULE_PATH_ONLY.has(groupArt)) continue;
 
     const p = resolveLibPath(lib);
-    if (p && fs.existsSync(p) && !seen.has(p)) {
-      seen.add(p);
-      paths.push(p);
-    }
+    if (p && fs.existsSync(p) && !seen.has(p)) { seen.add(p); paths.push(p); }
   }
 
-  // DO NOT add the vanilla client jar (mcVersion.jar) or the Forge loader jar.
-  // Forge's version.json JVM args already place those on the module path (-p).
-  // Putting them on -cp as well creates duplicate module exports and crashes.
+  // Fabric needs minecraft.jar explicitly on -cp
+  // Forge must NOT have it on -cp (it goes on -p via Forge's args)
+  if (!isForge) {
+    const clientJar = path.join(VERSIONS_DIR, mcVersion, `${mcVersion}.jar`);
+    if (fs.existsSync(clientJar) && !seen.has(clientJar)) {
+      seen.add(clientJar);
+      paths.push(clientJar);
+    }
+  }
 
   if (paths.length === 0) throw new Error('Classpath vide — relancez l\'installation.');
   return paths.join(path.delimiter);
@@ -301,6 +315,26 @@ function mergeProfiles(vanilla, loader) {
 }
 
 // ── Utilities ──────────────────────────────────────────────────────────────────
+function detectJavaMajorVersion(javaPath) {
+  try {
+    const { execFileSync } = require('child_process');
+    const out = execFileSync(javaPath, ['-version'], { encoding: 'utf8', stderr: 'pipe' });
+    // java -version outputs to stderr, merge both
+    const all = out + '';
+    const m = all.match(/version "(?:1\.)?([0-9]+)/);
+    return m ? parseInt(m[1]) : 17;
+  } catch (e) {
+    try {
+      // Fallback: try stderr
+      const { spawnSync } = require('child_process');
+      const r = spawnSync(javaPath, ['-version'], { encoding: 'utf8' });
+      const all = (r.stdout || '') + (r.stderr || '');
+      const m = all.match(/version "(?:1\.)?([0-9]+)/);
+      return m ? parseInt(m[1]) : 17;
+    } catch { return 17; }
+  }
+}
+
 function loadVersionJson(versionId) {
   const p = path.join(VERSIONS_DIR, versionId, `${versionId}.json`);
   if (!fs.existsSync(p)) throw new Error(
