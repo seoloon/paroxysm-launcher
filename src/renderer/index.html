@@ -41,6 +41,7 @@ a:hover{color:var(--violet)}
 .tb-btn:hover{background:rgba(255,255,255,.07);color:var(--text0)}
 .tb-btn.tb-close:hover{background:var(--red-bg);color:var(--red)}
 .tb-btn svg{width:10px;height:10px}
+.app-version {font-size: 10px;color: var(--text2);font-family: 'Sora', sans-serif;font-weight: 400;margin-left: 0px;letter-spacing: 0;vertical-align: middle;opacity: 0.8;}
 /* Body */
 #body{display:flex;flex:1;overflow:hidden;position:relative}
 #body::before{content:'';position:absolute;inset:0;pointer-events:none;z-index:0;background:radial-gradient(circle at 50% -20%,rgba(139,92,246,.15) 0%,transparent 50%),radial-gradient(circle at 100% 100%,rgba(34,211,238,.08) 0%,transparent 40%);}
@@ -82,6 +83,8 @@ a:hover{color:var(--violet)}
 .btn-secondary:hover{background:rgba(34,211,238,.15);border-color:var(--cyan);box-shadow:0 0 15px rgba(34,211,238,.2)}
 .btn-ghost{padding:8px 14px;background:transparent;border:1px solid var(--border);border-radius:var(--r-sm);color:var(--text1);font-size:12px;font-weight:600;transition:all .2s;}
 .btn-ghost:hover{background:rgba(139,92,246,.1);border-color:var(--violet);color:var(--text0)}
+.btn-inline {display: inline !important;width: auto !important;background: none !important;border: none !important;padding: 0 !important;margin: 0 !important;color: #00aaff !important;text-decoration: underline !important;cursor: pointer !important;font: inherit !important;vertical-align: baseline !important;}
+.btn-inline:hover {color: #0088cc !important;text-decoration: none !important;}
 /* Library */
 .lib-toolbar{display:flex;align-items:center;gap:12px;margin-bottom:24px}
 .search-wrap{position:relative;flex:1;max-width:380px}
@@ -293,6 +296,9 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
 .mr-dl-btn:hover{transform:translateY(-1px);box-shadow:0 4px 12px rgba(34,211,238,.3)}
 .mr-dl-btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
 .mr-dl-btn svg{width:14px;height:14px;stroke:currentColor;stroke-width:2}
+
+
+
 </style>
 </head>
 <body>
@@ -301,6 +307,7 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
     <div class="tb-logo">
       <img class="tb-logo-img" src="applogo.png">
       <span class="tb-logo-text">PAROXYSM</span>
+      <span class="app-version">v0.0.17</span>
     </div>
     <div class="tb-controls">
       <button class="tb-btn" id="btn-min"><svg viewBox="0 0 10 2" fill="currentColor"><rect width="10" height="2"/></svg></button>
@@ -365,7 +372,10 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
             <path d="M20 32h24M32 20v24" stroke="var(--cyan)" stroke-width="2" stroke-linecap="round"/>
           </svg>
           <h3>Aucun modpack installé</h3>
-          <p>Importez un modpack CurseForge (.zip) ou Modrinth (.mrpack)</p>
+          <p>
+            Importez un modpack CurseForge (.zip), Modrinth (.mrpack) ou rendez-vous dans
+            <button class="nav-btn btn-inline" data-page="browse">l'explorer</button>
+          </p>
           <button class="btn-primary" id="btn-import-empty">
             <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 3v10M6 9l4 4 4-4"/><path d="M4 15h12" stroke-linecap="round"/></svg>
             Importer un modpack
@@ -378,7 +388,7 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
         <div class="page-header">
           <div>
             <h1 class="page-title">Explorer</h1>
-            <p class="page-sub">Modrinth · mods, modpacks, shaders, ressources</p>
+            <p class="page-sub">Powered by Modrinth · mods, modpacks, shaders, ressources</p>
           </div>
         </div>
 
