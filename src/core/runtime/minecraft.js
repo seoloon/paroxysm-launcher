@@ -73,11 +73,18 @@ class MinecraftManager {
     if (!fs.existsSync(assetsIdxPath)) {
       onProgress(70, `Téléchargement de l'index des assets...`);
       await downloadFile(assetIndex.url, assetsIdxPath, pct => {
-        onProgress(70 + Math.round(pct * 0.15), `Assets index: ${pct}%`);
+        onProgress(70 + Math.round(pct * 0.05), `Assets index: ${pct}%`);
       });
     }
 
-    // Step 4: Core libraries (only those needed for classpath — not all)
+    // Step 4: Asset objects (sons, textures, langues)
+    // Sans ces fichiers Minecraft lance, affiche le logo puis crash silencieusement.
+    onProgress(75, 'Téléchargement des assets...');
+    await MinecraftManager._downloadAssets(assetsIdxPath, (pct, detail) => {
+      onProgress(75 + Math.round(pct * 0.1), detail);
+    });
+
+    // Step 5: Core libraries
     onProgress(85, `Téléchargement des bibliothèques vanilla...`);
     await MinecraftManager._downloadLibraries(profile.libraries || [], (pct) => {
       onProgress(85 + Math.round(pct * 0.14), `Bibliothèques: ${pct}%`);
@@ -88,6 +95,44 @@ class MinecraftManager {
 
     onProgress(100, `Minecraft ${mcVersion} prêt`);
     return { profile, versionDir, clientJar };
+  }
+
+  static async _downloadAssets(assetsIdxPath, onProgress = () => {}) {
+    try {
+      const index   = JSON.parse(fs.readFileSync(assetsIdxPath, 'utf8'));
+      const objects = Object.values(index.objects || {});
+      const objDir  = path.join(ASSETS_DIR, 'objects');
+
+      const missing = objects.filter(o => {
+        const sub = o.hash.substring(0, 2);
+        return !fs.existsSync(path.join(objDir, sub, o.hash));
+      });
+
+      if (missing.length === 0) { onProgress(100, 'Assets déjà présents'); return; }
+
+      let done = 0;
+      // Parallèle par lots de 30
+      for (let i = 0; i < missing.length; i += 30) {
+        const chunk = missing.slice(i, i + 30);
+        await Promise.allSettled(chunk.map(async (obj) => {
+          const sub  = obj.hash.substring(0, 2);
+          const dest = path.join(objDir, sub, obj.hash);
+          fs.mkdirSync(path.dirname(dest), { recursive: true });
+          if (!fs.existsSync(dest)) {
+            try {
+              await downloadFile(
+                `https://resources.download.minecraft.net/${sub}/${obj.hash}`,
+                dest
+              );
+            } catch {}
+          }
+          done++;
+        }));
+        onProgress(Math.round((done / missing.length) * 100), `Assets: ${done}/${missing.length}`);
+      }
+    } catch (e) {
+      console.warn('[minecraft] Asset download error:', e.message);
+    }
   }
 
   static async _downloadLibraries(libraries, onProgress = () => {}) {
