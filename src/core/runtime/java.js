@@ -1,27 +1,18 @@
 'use strict';
 /**
- * Java Manager — uses the Adoptium API to always fetch the latest JRE.
+ * Java Manager — Adoptium API
  *
- * API endpoint (no hardcoded version numbers ever again):
- *   https://api.adoptium.net/v3/binary/latest/{major}/ga/{os}/{arch}/jre/hotspot/normal/eclipse
- *
- * This URL does a redirect to the actual binary download, which follow-redirects handles.
- *
- * OS mapping:   win32 → windows | linux → linux | darwin → mac
- * Arch mapping: x64 → x64 | arm64 → aarch64 | ia32 → x86
- *
- * Java version matrix:
- *   MC ≤ 1.16  → Java 8
- *   MC 1.17    → Java 17   (16 is EOL, Mojang now recommends 17)
- *   MC 1.18–1.20 → Java 17
- *   MC 1.21+   → Java 21
+ * Fixes:
+ *  1. Apple Silicon (arm64) + Java 8 → force x64, let Rosetta handle it.
+ *     Adoptium doesn't ship Java 8 for aarch64/mac.
+ *  2. macOS binary path: Adoptium tar.gz on macOS extracts to
+ *     jdk-XX.Y.Z+N/Contents/Home/bin/java  (NOT jdk-.../bin/java)
+ *  3. (Bug was in launcher.js, fixed separately)
  */
 
-'use strict';
-
-const fs      = require('fs');
-const path    = require('path');
-const { execFile } = require('child_process');
+const fs       = require('fs');
+const path     = require('path');
+const { execFile, spawn } = require('child_process');
 const extract  = require('extract-zip');
 const { downloadFile } = require('../utils/download');
 const Store    = require('../utils/store');
@@ -29,34 +20,20 @@ const Store    = require('../utils/store');
 const JAVA_BASE    = path.join(Store.BASE_DIR, 'java');
 const ADOPTIUM_API = 'https://api.adoptium.net/v3/binary/latest';
 
-// Translate Node platform/arch to Adoptium API names
 const OS_MAP   = { win32: 'windows', linux: 'linux', darwin: 'mac' };
 const ARCH_MAP = { x64: 'x64', arm64: 'aarch64', ia32: 'x86', arm: 'arm' };
 
 class JavaManager {
-  /**
-   * Ensure correct Java is available for a given MC version.
-   * Returns the path to the java(.exe) binary.
-   */
   static async ensureJava(mcVersion, onProgress = () => {}) {
     const major = requiredJavaMajor(mcVersion);
     onProgress(0, `Java ${major} requis pour Minecraft ${mcVersion}...`);
 
-    // 1. Already embedded in launcher data dir?
     const embedded = findEmbedded(major);
-    if (embedded) {
-      onProgress(100, `Java ${major} trouvé (cache launcher)`);
-      return embedded;
-    }
+    if (embedded) { onProgress(100, `Java ${major} trouvé (cache launcher)`); return embedded; }
 
-    // 2. System Java of the right major version?
     const system = await findSystem(major);
-    if (system) {
-      onProgress(100, `Java ${major} trouvé (système) : ${system}`);
-      return system;
-    }
+    if (system) { onProgress(100, `Java ${major} trouvé (système) : ${system}`); return system; }
 
-    // 3. Download via Adoptium API
     const javaPath = await JavaManager._download(major, onProgress);
     onProgress(100, `Java ${major} installé`);
     return javaPath;
@@ -64,17 +41,24 @@ class JavaManager {
 
   static async _download(major, onProgress = () => {}) {
     const platform = process.platform;
-    const arch     = process.arch;
+    let arch       = process.arch;
     const osName   = OS_MAP[platform];
-    const archName = ARCH_MAP[arch] || 'x64';
-
     if (!osName) throw new Error(`Plateforme non supportée : ${platform}`);
 
-    // Build the Adoptium API URL — this redirects to the actual file
-    const apiUrl = `${ADOPTIUM_API}/${major}/ga/${osName}/${archName}/jre/hotspot/normal/eclipse`;
-    onProgress(0, `Téléchargement Java ${major} (Adoptium)...`);
+    // ── Fix 1: Apple Silicon + Java 8 ────────────────────────────────────────
+    // Adoptium ne publie pas Java 8 pour mac/aarch64.
+    // On force x64 et on laisse Rosetta 2 gérer la traduction.
+    if (platform === 'darwin' && arch === 'arm64' && major <= 8) {
+      console.log('[java] Apple Silicon + Java 8 → forcing x64 (Rosetta 2)');
+      arch = 'x64';
+    }
+
+    const archName = ARCH_MAP[arch] || 'x64';
+    const apiUrl   = `${ADOPTIUM_API}/${major}/ga/${osName}/${archName}/jre/hotspot/normal/eclipse`;
+    onProgress(0, `Téléchargement Java ${major} ${archName} (Adoptium)...`);
 
     const isWindows = platform === 'win32';
+    const isMac     = platform === 'darwin';
     const ext       = isWindows ? '.zip' : '.tar.gz';
     const tmpFile   = path.join(JAVA_BASE, `java${major}_download${ext}`);
     const destDir   = path.join(JAVA_BASE, String(major));
@@ -82,58 +66,44 @@ class JavaManager {
     fs.mkdirSync(JAVA_BASE, { recursive: true });
     fs.mkdirSync(destDir,   { recursive: true });
 
-    // Download (follow-redirects will follow the 302 from Adoptium to GitHub/CDN)
     try {
       await downloadFile(apiUrl, tmpFile, pct => {
         onProgress(Math.round(pct * 0.75), `Java ${major} : ${pct}%`);
       });
     } catch (e) {
-      // Clean up partial download
       try { fs.unlinkSync(tmpFile); } catch {}
-      throw new Error(`Impossible de télécharger Java ${major} : ${e.message}\nVérifiez votre connexion internet.`);
+      throw new Error(`Impossible de télécharger Java ${major} : ${e.message}`);
     }
 
     onProgress(75, 'Extraction de Java...');
 
     if (isWindows) {
-      // ZIP extraction (Windows)
-      try {
-        await extract(tmpFile, { dir: destDir });
-      } catch (e) {
-        try { fs.unlinkSync(tmpFile); } catch {}
-        throw new Error(`Extraction Java échouée : ${e.message}`);
-      }
+      try { await extract(tmpFile, { dir: destDir }); }
+      catch (e) { try { fs.unlinkSync(tmpFile); } catch {}; throw new Error(`Extraction Java échouée : ${e.message}`); }
     } else {
-      // tar.gz extraction (Linux / macOS)
+      // ── Fix 2: tar extraction sans --strip-components ─────────────────────
+      // On extrait avec la structure complète (avec le dossier jdk-XX.Y.Z+N/).
+      // findJavaBin() descend ensuite dans la hiérarchie pour trouver le binaire,
+      // y compris la structure macOS : jdk-.../Contents/Home/bin/java
       await new Promise((resolve, reject) => {
-        const { spawn } = require('child_process');
-        const tar = spawn('tar', ['-xzf', tmpFile, '-C', destDir, '--strip-components=1']);
+        const tar = spawn('tar', ['-xzf', tmpFile, '-C', destDir]);
         let stderr = '';
         tar.stderr.on('data', d => { stderr += d.toString(); });
-        tar.on('close', code => {
-          if (code === 0) resolve();
-          else reject(new Error(`tar failed (code ${code}): ${stderr}`));
-        });
+        tar.on('close', code => { code === 0 ? resolve() : reject(new Error(`tar failed (${code}): ${stderr}`)); });
         tar.on('error', reject);
       });
     }
 
-    // Clean up archive
     try { fs.unlinkSync(tmpFile); } catch {}
 
     onProgress(95, 'Localisation du binaire Java...');
     const bin = findJavaBin(destDir);
     if (!bin) {
-      throw new Error(
-        `Binaire Java introuvable après extraction dans : ${destDir}\n` +
-        `Contenu : ${fs.readdirSync(destDir).join(', ')}`
-      );
+      const listing = listDeep(destDir, 3);
+      throw new Error(`Binaire Java introuvable après extraction.\nContenu :\n${listing}`);
     }
 
-    if (platform !== 'win32') {
-      try { fs.chmodSync(bin, '755'); } catch {}
-    }
-
+    try { if (!isWindows) fs.chmodSync(bin, '755'); } catch {}
     return bin;
   }
 }
@@ -141,11 +111,10 @@ class JavaManager {
 // ── Utilities ──────────────────────────────────────────────────────────────────
 
 function requiredJavaMajor(mcVersion) {
-  const parts = mcVersion.split('.');
-  const minor = parseInt(parts[1] || '0', 10);
-  if (minor <= 16) return 8;   // MC 1.16 and older
-  if (minor <= 20) return 17;  // MC 1.17–1.20 (Java 16 is EOL, 17 is LTS and works)
-  return 21;                   // MC 1.21+
+  const minor = parseInt((mcVersion.split('.')[1] || '0'), 10);
+  if (minor <= 16) return 8;
+  if (minor <= 20) return 17;
+  return 21;
 }
 
 function findEmbedded(major) {
@@ -156,70 +125,120 @@ function findEmbedded(major) {
 
 async function findSystem(requiredMajor) {
   const binName = process.platform === 'win32' ? 'java.exe' : 'java';
-
-  // Build candidate list: JAVA_HOME first, then PATH defaults
   const candidates = [];
-  if (process.env.JAVA_HOME) {
+
+  if (process.env.JAVA_HOME)
     candidates.push(path.join(process.env.JAVA_HOME, 'bin', binName));
-  }
-  // Common system locations
+
   if (process.platform === 'win32') {
-    candidates.push('java'); // rely on PATH
-    // Common Windows install paths
-    const javaBase = 'C:\\Program Files\\Eclipse Adoptium';
-    if (fs.existsSync(javaBase)) {
-      for (const dir of fs.readdirSync(javaBase)) {
-        candidates.push(path.join(javaBase, dir, 'bin', 'java.exe'));
-      }
+    candidates.push('java');
+    for (const base of ['C:\\Program Files\\Eclipse Adoptium', 'C:\\Program Files\\Java']) {
+      if (fs.existsSync(base))
+        for (const d of fs.readdirSync(base))
+          candidates.push(path.join(base, d, 'bin', 'java.exe'));
     }
-    const javaBase2 = 'C:\\Program Files\\Java';
-    if (fs.existsSync(javaBase2)) {
-      for (const dir of fs.readdirSync(javaBase2)) {
-        candidates.push(path.join(javaBase2, dir, 'bin', 'java.exe'));
+  } else if (process.platform === 'darwin') {
+    // macOS system Java via java_home
+    candidates.push('java', '/usr/bin/java', '/usr/local/bin/java');
+    // Homebrew / SDKMAN / manually installed
+    for (const base of [
+      '/Library/Java/JavaVirtualMachines',
+      `${process.env.HOME}/.sdkman/candidates/java`,
+    ]) {
+      if (!fs.existsSync(base)) continue;
+      for (const d of fs.readdirSync(base)) {
+        // macOS JDK layout: JDK.jdk/Contents/Home/bin/java
+        for (const suffix of ['Contents/Home/bin/java', 'bin/java']) {
+          candidates.push(path.join(base, d, suffix));
+        }
       }
     }
   } else {
     candidates.push('java', '/usr/bin/java', '/usr/local/bin/java');
+    for (const base of ['/usr/lib/jvm', '/opt/java']) {
+      if (!fs.existsSync(base)) continue;
+      for (const d of fs.readdirSync(base))
+        candidates.push(path.join(base, d, 'bin', 'java'));
+    }
   }
 
-  for (const candidate of candidates) {
-    if (!candidate) continue;
+  for (const c of candidates) {
+    if (!c) continue;
     try {
-      const version = await getJavaMajorVersion(candidate);
-      if (version === requiredMajor) return candidate;
-    } catch {
-      // Not found or wrong version — continue
-    }
+      const v = await getJavaMajorVersion(c);
+      if (v === requiredMajor) return c;
+    } catch {}
   }
   return null;
 }
 
+/**
+ * Find java binary inside a root dir.
+ * Handles:
+ *  - Windows zip:  rootDir/jdk-XX.Y.Z+N/bin/java.exe
+ *  - Linux tar:    rootDir/jdk-XX.Y.Z+N/bin/java   (with or without strip)
+ *  - macOS tar:    rootDir/jdk-XX.Y.Z+N/Contents/Home/bin/java
+ *                  rootDir/jdk-XX.Y.Z+N.jdk/Contents/Home/bin/java
+ */
 function findJavaBin(rootDir) {
   const binName = process.platform === 'win32' ? 'java.exe' : 'java';
+  const isMac   = process.platform === 'darwin';
 
-  // Direct: rootDir/bin/java
+  // Check direct (after --strip-components=1 or pre-extracted)
+  if (isMac) {
+    const macDirect = path.join(rootDir, 'Contents', 'Home', 'bin', binName);
+    if (fs.existsSync(macDirect)) return macDirect;
+  }
   const direct = path.join(rootDir, 'bin', binName);
   if (fs.existsSync(direct)) return direct;
 
-  // One level deep: rootDir/jdk-17.0.x+y/bin/java  (zip layout)
+  // One or two levels deep
   try {
     for (const sub of fs.readdirSync(rootDir)) {
-      const candidate = path.join(rootDir, sub, 'bin', binName);
-      if (fs.existsSync(candidate)) return candidate;
+      const subPath = path.join(rootDir, sub);
+      if (!fs.statSync(subPath).isDirectory()) continue;
+
+      // macOS layout: sub/Contents/Home/bin/java  or  sub.jdk/Contents/Home/bin/java
+      if (isMac) {
+        const macPath = path.join(subPath, 'Contents', 'Home', 'bin', binName);
+        if (fs.existsSync(macPath)) return macPath;
+      }
+
+      // Standard layout: sub/bin/java
+      const standard = path.join(subPath, 'bin', binName);
+      if (fs.existsSync(standard)) return standard;
+
+      // Go one level deeper (e.g. sub/jre/bin/java for JDK bundles)
+      try {
+        for (const sub2 of fs.readdirSync(subPath)) {
+          const deep = path.join(subPath, sub2, 'bin', binName);
+          if (fs.existsSync(deep)) return deep;
+        }
+      } catch {}
     }
   } catch {}
 
   return null;
 }
 
+function listDeep(dir, depth) {
+  if (depth <= 0 || !fs.existsSync(dir)) return '';
+  try {
+    return fs.readdirSync(dir).map(f => {
+      const full = path.join(dir, f);
+      const isDir = fs.statSync(full).isDirectory();
+      return `  ${f}${isDir ? '/' : ''}\n${isDir ? listDeep(full, depth - 1).split('\n').map(l => '  ' + l).join('\n') : ''}`;
+    }).join('');
+  } catch { return ''; }
+}
+
 function getJavaMajorVersion(javaPath) {
   return new Promise((resolve, reject) => {
     execFile(javaPath, ['-version'], { timeout: 8000 }, (err, stdout, stderr) => {
-      const output = stderr || stdout || '';
-      // Handles both "1.8.0_xxx" and "17.0.x" style version strings
-      const m = output.match(/version "(?:1\.)?(\d+)/);
+      const out = stderr || stdout || '';
+      const m = out.match(/version "(?:1\.)?(\d+)/);
       if (m) resolve(parseInt(m[1], 10));
-      else reject(new Error(`Cannot parse java version from: ${output.slice(0, 100)}`));
+      else reject(new Error(`Cannot parse version: ${out.slice(0, 100)}`));
     });
   });
 }
