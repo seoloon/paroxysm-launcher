@@ -31,9 +31,14 @@ contextBridge.exposeInMainWorld('px', {
     logout:  () => ipcRenderer.invoke('auth:logout'),
   },
   library: {
-    list:   ()   => ipcRenderer.invoke('library:list'),
-    get:    id   => ipcRenderer.invoke('library:get', id),
-    delete: id   => ipcRenderer.invoke('library:delete', id),
+    list:   ()            => ipcRenderer.invoke('library:list'),
+    get:    id            => ipcRenderer.invoke('library:get', id),
+    delete: id            => ipcRenderer.invoke('library:delete', id),
+    update: (id, fields)  => ipcRenderer.invoke('library:update', id, fields),
+  },
+  logs: {
+    list:   packId  => ipcRenderer.invoke('modpack:get-logs', packId),
+    read:   logPath => ipcRenderer.invoke('modpack:read-log', logPath),
   },
   modpack: {
     pickFile:     ()    => ipcRenderer.invoke('modpack:pick-file'),

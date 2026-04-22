@@ -274,6 +274,52 @@ ipcMain.handle('auth:logout', () => { auth.logout(); return true; });
 ipcMain.handle('library:list',   ()      => library.list());
 ipcMain.handle('library:get',    (_, id) => library.get(id));
 ipcMain.handle('library:delete', (_, id) => library.delete(id));
+ipcMain.handle('library:update', (_, id, fields) => library.update(id, fields));
+
+// ── Per-instance logs ─────────────────────────────────────────────────────────
+ipcMain.handle('modpack:get-logs', (_, packId) => {
+  const entry = library.get(packId);
+  if (!entry?.gameDir) return [];
+  try {
+    const fs   = require('fs');
+    const path = require('path');
+    const results = [];
+    const logDir    = path.join(entry.gameDir, 'logs');
+    const crashDir  = path.join(entry.gameDir, 'crash-reports');
+    if (fs.existsSync(logDir)) {
+      for (const f of ['latest.log', 'fml-client-latest.log', 'debug.log']) {
+        const fp = path.join(logDir, f);
+        if (fs.existsSync(fp)) {
+          const st = fs.statSync(fp);
+          results.push({ name: f, path: fp, type: f.includes('fml') ? 'fml' : 'latest', size: st.size, mtime: st.mtimeMs });
+        }
+      }
+    }
+    if (fs.existsSync(crashDir)) {
+      const files = fs.readdirSync(crashDir).filter(f => f.endsWith('.txt')).sort().reverse().slice(0, 5);
+      for (const f of files) {
+        const fp = path.join(crashDir, f);
+        const st = fs.statSync(fp);
+        results.push({ name: f, path: fp, type: 'crash', size: st.size, mtime: st.mtimeMs });
+      }
+    }
+    return results.sort((a, b) => b.mtime - a.mtime);
+  } catch { return []; }
+});
+
+ipcMain.handle('modpack:read-log', (_, logPath) => {
+  try {
+    const fs = require('fs');
+    if (!fs.existsSync(logPath)) return null;
+    const size = fs.statSync(logPath).size;
+    const maxBytes = 500 * 1024;
+    const buf = Buffer.alloc(Math.min(size, maxBytes));
+    const fd  = fs.openSync(logPath, 'r');
+    fs.readSync(fd, buf, 0, buf.length, Math.max(0, size - buf.length));
+    fs.closeSync(fd);
+    return buf.toString('utf8');
+  } catch { return null; }
+});
 
 // ── Import ────────────────────────────────────────────────────────────────────
 ipcMain.handle('modpack:pick-file', async () => {
@@ -375,13 +421,18 @@ ipcMain.handle('game:launch', async (_, modpackId) => {
 
     const javaPath = await JavaManager.ensureJava(entry.mcVersion, () => {});
 
+    // Use per-instance RAM if set, otherwise fall back to global setting
+    const instanceRam = entry.ram || 0;
+    const globalRam   = settings.ram || 4;
+    const ramToUse    = instanceRam > 0 ? instanceRam : globalRam;
+
     const child = await GameLauncher.launch({
       entry,
       javaPath,
       profile:     useOnline ? profile      : null,
       accessToken: useOnline ? auth.getStoredToken() : null,
       uuid:        useOnline ? auth.getStoredUUID()  : null,
-      ram:         settings.ram || 4,
+      ram:         ramToUse,
       offline:     !useOnline,
       offlineName: settings.username || 'Player',
     });

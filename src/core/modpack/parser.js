@@ -76,6 +76,9 @@ class ModpackParser {
     log(`  MC ${mcInfo.version} — ${loader} ${mlVersion}`);
     log(`  ${manifest.files?.length ?? 0} mods`);
 
+    // Try to extract icon image from common locations in the zip
+    const iconData = extractIcon(tmpDir);
+
     return {
       format:           'curseforge',
       name:             manifest.name || 'Modpack sans nom',
@@ -91,6 +94,7 @@ class ModpackParser {
         required:  f.required !== false,
       })),
       overridesDir: path.join(tmpDir, manifest.overrides || 'overrides'),
+      iconData,
       tmpDir,
     };
   }
@@ -111,6 +115,8 @@ class ModpackParser {
     log(`  MC ${mcVer} — ${loader} ${mlVersion}`);
     log(`  ${manifest.files?.length ?? 0} fichiers`);
 
+    const iconData = extractIcon(tmpDir);
+
     return {
       format:           'modrinth',
       name:             manifest.name || 'Modpack sans nom',
@@ -125,10 +131,11 @@ class ModpackParser {
         urls:    f.downloads || [],
         sha512:  f.hashes?.sha512,
         sha1:    f.hashes?.sha1,
-        path:    f.path,   // relative path e.g. "mods/jei-1.20.1.jar"
+        path:    f.path,
         size:    f.fileSize,
       })),
       overridesDir: path.join(tmpDir, 'overrides'),
+      iconData,
       tmpDir,
     };
   }
@@ -167,6 +174,30 @@ function normalizeLoader(str) {
   if (s.includes('fabric'))   return 'fabric';
   if (s.includes('quilt'))    return 'quilt';
   return 'unknown';
+}
+
+/**
+ * Look for a modpack icon in common locations within extracted tmpDir.
+ * Returns a data URL string or null.
+ */
+function extractIcon(tmpDir) {
+  const candidates = [
+    'icon.png', 'icon.jpg', 'icon.jpeg', 'icon.webp',
+    'logo.png', 'logo.jpg',
+    path.join('overrides', 'icon.png'),
+    path.join('overrides', 'logo.png'),
+  ];
+  for (const rel of candidates) {
+    const full = path.join(tmpDir, rel);
+    if (fs.existsSync(full)) {
+      try {
+        const ext  = path.extname(rel).slice(1).replace('jpg', 'jpeg');
+        const data = fs.readFileSync(full);
+        return `data:image/${ext};base64,${data.toString('base64')}`;
+      } catch {}
+    }
+  }
+  return null;
 }
 
 module.exports = ModpackParser;

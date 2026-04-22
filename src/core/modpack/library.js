@@ -41,6 +41,10 @@ class ModpackLibrary {
       failedModsList:   failedMods.map(f => ({ url: f.url, dest: path.basename(f.dest || ''), error: f.error })),
       addedAt:          new Date().toISOString(),
       lastPlayed:       null,
+      iconData:         parsed.iconData || null,   // base64 data URL extracted from zip
+      ram:              null,                      // per-instance RAM override (null = use global)
+      customName:       null,                      // user-set display name
+      notes:            '',                        // user notes
     };
 
     const all = this._all();
@@ -56,6 +60,18 @@ class ModpackLibrary {
   updateLastPlayed(id) {
     const all = this._all();
     if (all[id]) { all[id].lastPlayed = new Date().toISOString(); this._store.set('library', all); }
+  }
+
+  update(id, fields) {
+    const all = this._all();
+    if (!all[id]) return false;
+    // Only allow safe fields to be updated
+    const allowed = ['customName', 'iconData', 'ram', 'notes'];
+    for (const k of allowed) {
+      if (fields[k] !== undefined) all[id][k] = fields[k];
+    }
+    this._store.set('library', all);
+    return all[id];
   }
 
   delete(id) {
