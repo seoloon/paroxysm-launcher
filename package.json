@@ -1,7 +1,7 @@
 {
   "name": "paroxysm-launcher",
-  "version": "0.1.0",
-  "description": "Paroxysm Launcher — Minecraft Modpack Manager",
+  "version": "0.1.20",
+  "description": "Paroxysm Launcher — The final Minecraft launcher",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
@@ -23,7 +23,7 @@
   "build": {
     "appId": "dev.paroxysm.launcher",
     "productName": "Paroxysm Launcher",
-    "copyright": "Copyright © 2026 Paroxysm",
+    "copyright": "Copyright © 2026 Seoloon",
     "directories": { "output": "dist" },
     "win": {
       "target": [{ "target": "nsis", "arch": ["x64"] }],
@@ -36,6 +36,15 @@
     "mac": {
       "target": [{ "target": "dmg", "arch": ["x64", "arm64"] }],
       "icon": "assets/icon.icns"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "Paroxysm Launcher",
+      "createDesktopShortcut": true,
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "artifactName": "Paroxysm-Setup-${version}.${ext}"
     },
     "files": ["src/**/*", "assets/**/*"]
   }
