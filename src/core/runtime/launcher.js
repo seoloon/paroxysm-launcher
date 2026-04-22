@@ -124,30 +124,21 @@ class GameLauncher {
 
     const finalGameArgs = rawGameArgs.filter(a => a !== '--demo' && !a.includes('${'));
 
-    // --- 1. On détermine d'abord la version de Java ---
-    const javaVersion = detectJavaMajorVersion(javaPath);
+    const mainClass = loaderJson.mainClass || vanillaJson.mainClass;
+    if (!mainClass) throw new Error(`mainClass introuvable dans ${versionId}`);
 
-    // --- 2. On filtre les arguments (On crée la variable AVANT de l'utiliser) ---
+    // ── Filter JVM args incompatible with the detected Java version ─────────────
+    // --sun-misc-unsafe-memory-access=allow : Java 23+ only
+    // --enable-native-access                : Java 21+ only
+    const javaVersion = detectJavaMajorVersion(javaPath);
     const filteredJvmArgs = forgeJvmArgs.filter(arg => {
-      // Ces arguments font crash le jeu si Java est < 23 ou < 21
       if (arg.startsWith('--sun-misc-unsafe-memory-access') && javaVersion < 23) return false;
       if (arg.startsWith('--enable-native-access')          && javaVersion < 21) return false;
       return true;
     });
 
-    // --- 3. Maintenant on peut construire la ligne de commande complète ---
-    const mainClass = loaderJson.mainClass || vanillaJson.mainClass;
-    if (!mainClass) throw new Error(`mainClass introuvable pour la version ${versionId}`);
-
-    const fullArgs = [
-      ...baseJvmArgs,
-      ...filteredJvmArgs, // <--- Ici, la variable est maintenant bien définie !
-      mainClass,
-      ...finalGameArgs
-    ].filter(Boolean);
-
-    // Petit log pour vérifier que tout est OK
-    console.log('[launch] java:', javaPath, `(v${javaVersion})`);
+    // Full command: base perf flags + loader JVM args + main class + game args
+    const fullArgs = [...baseJvmArgs, ...filteredJvmArgs, mainClass, ...finalGameArgs].filter(Boolean);
 
     console.log('[launch] java:      ', javaPath, `(v${javaVersion})`);
     console.log('[launch] mainClass: ', mainClass);
