@@ -26,7 +26,8 @@ const isDev = process.argv.includes('--dev');
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1200, height: 760, minWidth: 900, minHeight: 600,
+    width: 1200, height: 760,
+    minWidth: 900, minHeight: 600,
     frame: false, resizable: true,
     webPreferences: {
       nodeIntegration: false, contextIsolation: true,
