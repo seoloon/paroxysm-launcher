@@ -375,7 +375,7 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
     <div class="tb-logo">
       <img class="tb-logo-img" src="applogo.png">
       <span class="tb-logo-text">PAROXYSM</span>
-      <span class="tb-version">v0.0.20</span>
+      <span class="tb-version">v0.3.8</span>
     </div>
     <div class="tb-controls">
       <button class="tb-btn" id="btn-min"><svg viewBox="0 0 10 2" fill="currentColor"><rect width="10" height="2"/></svg></button>
@@ -486,6 +486,13 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
             <option value="1.16.5">1.16.5</option>
             <option value="1.12.2">1.12.2</option>
           </select>
+          <select id="mr-loader-filter" class="mr-select">
+            <option value="">Tous loaders</option>
+            <option value="forge">Forge</option>
+            <option value="neoforge">NeoForge</option>
+            <option value="fabric">Fabric</option>
+            <option value="quilt">Quilt</option>
+          </select>
           <select id="mr-sort-filter" class="mr-select">
             <option value="relevance">Pertinence</option>
             <option value="downloads">Téléchargements</option>
@@ -562,8 +569,9 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
           <div class="settings-card">
             <h3>Performances</h3>
             <div class="form-group">
-              <label class="form-label">RAM allouée — <span class="accent" id="ram-val">4 GB</span></label>
+              <label class="form-label">RAM allouée — <span class="accent" id="ram-val">4 GB</span> <span id="ram-system-info" style="font-size:11px;color:var(--text2);font-weight:400"></span></label>
               <input type="range" id="inp-ram" min="1" max="32" step="1" value="4"/>
+              <div id="ram-warning" style="display:none;margin-top:10px;padding:10px 14px;border-radius:var(--r-sm);background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);color:var(--orange);font-size:12px;font-weight:600;line-height:1.5"></div>
               <div class="form-hint">Recommandé : 4-8 GB pour Forge, 2-4 GB pour Fabric.</div>
             </div>
           </div>
@@ -1671,12 +1679,56 @@ px.on('auth:exchanging',()=>{$('auth-pending-label').textContent='Vérification 
 $('btn-logout').addEventListener('click',async function(){if(!confirm('Se déconnecter ?'))return;await px.auth.logout();await refreshAuth();});
 
 // ── Settings ──────────────────────────────────────────────────────────────────
+let _systemRamGB = 0;
+
 async function loadSettings(){
   const cfg=await px.config.get('settings')||{};
-  $('inp-ram').value=cfg.ram||4;$('ram-val').textContent=(cfg.ram||4)+' GB';
+
+  // Fetch real system RAM and adapt the slider
+  try {
+    const info = await px.system.ram();
+    _systemRamGB = info.totalGB;
+    const maxSlider = Math.max(4, Math.floor(_systemRamGB));
+    $('inp-ram').max = maxSlider;
+    $('ram-system-info').textContent = `(système : ${_systemRamGB} GB)`;
+  } catch {}
+
+  const savedRam = cfg.ram || 4;
+  $('inp-ram').value = savedRam;
+  $('ram-val').textContent = savedRam + ' GB';
+  updateRamWarning(savedRam);
+
   $('inp-username').value=cfg.username||'';$('inp-force-offline').checked=cfg.forceOffline||false;$('inp-cf-key').value=cfg.cfApiKey||'';
 }
-$('inp-ram').addEventListener('input',function(){$('ram-val').textContent=this.value+' GB';});
+
+function updateRamWarning(ramGB) {
+  const warn = $('ram-warning');
+  if (!warn) return;
+  if (!_systemRamGB || _systemRamGB === 0) { warn.style.display='none'; return; }
+  const ratio = ramGB / _systemRamGB;
+  const leftGB = (_systemRamGB - ramGB).toFixed(1);
+  if (ratio >= 0.9) {
+    warn.style.display='block';
+    warn.style.background='rgba(244,63,94,.1)';
+    warn.style.borderColor='rgba(244,63,94,.4)';
+    warn.style.color='var(--red)';
+    warn.textContent=`⚠ Attention — seulement ${leftGB} GB restants pour le système. Risque de crash ou de freeze.`;
+  } else if (ratio >= 0.75) {
+    warn.style.display='block';
+    warn.style.background='rgba(245,158,11,.1)';
+    warn.style.borderColor='rgba(245,158,11,.3)';
+    warn.style.color='var(--orange)';
+    warn.textContent=`⚠ Plus assez de RAM allouée au système (${leftGB} GB restants). Risque de lenteurs.`;
+  } else {
+    warn.style.display='none';
+  }
+}
+
+$('inp-ram').addEventListener('input',function(){
+  const v = parseInt(this.value);
+  $('ram-val').textContent = v + ' GB';
+  updateRamWarning(v);
+});
 async function saveAllSettings(){
   await px.config.set('settings',{ram:parseInt($('inp-ram').value),username:$('inp-username').value.trim(),forceOffline:$('inp-force-offline').checked,cfApiKey:$('inp-cf-key').value.trim()});
   document.querySelectorAll('.save-confirm').forEach(c=>{c.style.display='inline';setTimeout(()=>{c.style.display='none';},2000);});
@@ -1688,7 +1740,25 @@ $('cf-link').addEventListener('click',e=>{e.preventDefault();px.shell.open('http
 async function loadDataPath(){const p=await px.config.get('__dataPath__').catch(()=>null);if(p)$('data-path').textContent=p;}
 
 // ── Modrinth Browser ──────────────────────────────────────────────────────────
-const mrState={type:'modpack',page:0,limit:20,total:0,query:'',version:'1.20.1',sort:'relevance',firstLoad:true,loading:false};
+const mrState={type:'modpack',page:0,limit:20,total:0,query:'',version:'',loader:'',sort:'relevance',firstLoad:true,loading:false};
+
+// Load MC versions dynamically from Modrinth API
+async function loadMrVersions() {
+  try {
+    const versions = await px.modrinth.getGameVersions();
+    if (!Array.isArray(versions) || versions.error) return;
+    const sel = $('mr-version-filter');
+    const current = sel.value;
+    sel.innerHTML = '<option value="">Toutes versions</option>';
+    versions.forEach(v => {
+      const opt = document.createElement('option');
+      opt.value = v; opt.textContent = v;
+      if (v === current || (!current && v === '1.20.1')) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    mrState.version = sel.value;
+  } catch {}
+}
 
 // Type tabs
 document.querySelectorAll('[data-type]').forEach(btn=>{
@@ -1706,6 +1776,7 @@ $('mr-search').addEventListener('input',function(){
   mrSearchTimer=setTimeout(()=>{mrState.query=this.value;mrState.page=0;mrSearch();},400);
 });
 $('mr-version-filter').addEventListener('change',function(){mrState.version=this.value;mrState.page=0;mrSearch();});
+$('mr-loader-filter').addEventListener('change',function(){mrState.loader=this.value;mrState.page=0;mrSearch();});
 $('mr-sort-filter').addEventListener('change',function(){mrState.sort=this.value;mrState.page=0;mrSearch();});
 
 async function mrSearch(){
@@ -1717,6 +1788,8 @@ async function mrSearch(){
     query:mrState.query,type:mrState.type,
     offset:mrState.page*mrState.limit,limit:mrState.limit,
     gameVersion:mrState.version,
+    loader:mrState.loader,
+    sort:mrState.sort,
   });
 
   mrState.loading=false;$('mr-loading').style.display='none';
@@ -1813,26 +1886,51 @@ async function openMrDetail(projectId){
   const statsHtml=`<div class="mr-detail-stats">
 <div class="mr-detail-stat"><span class="mr-detail-stat-val">${fmt(project.downloads)}</span><span class="mr-detail-stat-label">Téléchargements</span></div>
 <div class="mr-detail-stat"><span class="mr-detail-stat-val">${fmt(project.followers)}</span><span class="mr-detail-stat-label">Followers</span></div>
-<div class="mr-detail-stat"><span class="mr-detail-stat-val">${(project.versions||[]).length}</span><span class="mr-detail-stat-label">Versions</span></div>
+<div class="mr-detail-stat"><span class="mr-detail-stat-val">${(Array.isArray(versions)?versions:project.versions||[]).length}</span><span class="mr-detail-stat-label">Versions</span></div>
 </div>`;
 
-  // Versions list (last 10)
-  const versionsList=Array.isArray(versions)?versions.slice(0,10):[];
-  const versionsHtml=versionsList.length?`<div class="mr-versions-section">
-<h4>Versions disponibles</h4>
-${versionsList.map(v=>`
-<div class="mr-version-item">
+  // Build versions list with filter controls
+  const allVersions = Array.isArray(versions) ? versions : [];
+
+  // Collect unique MC versions and loaders for filter dropdowns
+  const mcVersionSet = new Set();
+  const loaderSet = new Set();
+  allVersions.forEach(v => {
+    (v.game_versions||[]).forEach(gv => mcVersionSet.add(gv));
+    (v.loaders||[]).forEach(l => loaderSet.add(l));
+  });
+  const mcVersionsSorted = [...mcVersionSet].sort((a,b)=>b.localeCompare(a,undefined,{numeric:true}));
+  const loadersSorted = [...loaderSet].sort();
+
+  const versionsSection = allVersions.length ? `
+<div class="mr-versions-section">
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:10px;flex-wrap:wrap">
+  <h4 style="margin:0">Versions (${allVersions.length})</h4>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <select id="mr-dv-mc" class="mr-select" style="font-size:11px;padding:5px 8px;min-width:100px">
+      <option value="">Toutes MC</option>
+      ${mcVersionsSorted.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('')}
+    </select>
+    ${loadersSorted.length>1?`<select id="mr-dv-loader" class="mr-select" style="font-size:11px;padding:5px 8px;min-width:90px">
+      <option value="">Tous loaders</option>
+      ${loadersSorted.map(l=>`<option value="${esc(l)}">${esc(l)}</option>`).join('')}
+    </select>`:''}
+  </div>
+</div>
+<div id="mr-dv-list">
+${allVersions.map(v=>`
+<div class="mr-version-item" data-mcv="${esc((v.game_versions||[]).join(','))}" data-loader="${esc((v.loaders||[]).join(','))}">
 <div class="mr-version-info">
-<div class="mr-version-name">${esc(v.name||v.version_number)}</div>
-<div class="mr-version-meta">${(v.game_versions||[]).join(', ')} · ${esc(v.loaders?.join(', ')||'')}</div>
+<div class="mr-version-name">${esc(v.name||v.version_number)} <span style="font-size:10px;padding:2px 7px;border-radius:10px;margin-left:6px;background:${v.version_type==='release'?'rgba(16,185,129,.15)':v.version_type==='beta'?'rgba(245,158,11,.15)':'rgba(139,92,246,.15)'};color:${v.version_type==='release'?'var(--green)':v.version_type==='beta'?'var(--orange)':'var(--violet)'}">${esc(v.version_type||'release')}</span></div>
+<div class="mr-version-meta">${(v.game_versions||[]).slice(0,4).join(', ')}${(v.game_versions||[]).length>4?'…':''} · ${esc(v.loaders?.join(', ')||'')}</div>
 </div>
 <button class="mr-dl-btn" data-vid="${esc(v.id)}" data-pid="${esc(projectId)}" data-fname="${esc(v.files?.[0]?.filename||'download')}">
 <svg viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6l3 3 3-3" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 11h10" stroke-linecap="round"/></svg>
 Télécharger
 </button>
 </div>`).join('')}
-</div>`:
-'<p style="color:var(--text2);font-size:13px">Aucune version disponible.</p>';
+</div>
+</div>` : '<p style="color:var(--text2);font-size:13px">Aucune version disponible.</p>';
 
   $('mr-detail-content').innerHTML=`
 <div class="mr-detail-header">
@@ -1846,8 +1944,23 @@ ${iconHtml}
 <div class="mr-detail-body">
 <p class="mr-detail-desc">${esc(project.description||'')}</p>
 ${statsHtml}
-${versionsHtml}
+${versionsSection}
 </div>`;
+
+  // Version filter logic
+  function filterDetailVersions() {
+    const mcv = $('mr-dv-mc')?.value||'';
+    const ldr = $('mr-dv-loader')?.value||'';
+    $('mr-dv-list')?.querySelectorAll('.mr-version-item').forEach(row=>{
+      const rowMcv = row.dataset.mcv||'';
+      const rowLdr = row.dataset.loader||'';
+      const okMc = !mcv || rowMcv.split(',').includes(mcv);
+      const okLdr = !ldr || rowLdr.split(',').includes(ldr);
+      row.style.display = okMc && okLdr ? '' : 'none';
+    });
+  }
+  $('mr-dv-mc')?.addEventListener('change', filterDetailVersions);
+  $('mr-dv-loader')?.addEventListener('change', filterDetailVersions);
 
   // Download buttons
   $('mr-detail-content').querySelectorAll('.mr-dl-btn').forEach(btn=>{
@@ -1891,7 +2004,7 @@ px.on('install:error',msg=>showModalError(msg));
 px.on('install:done',()=>{updateStep('done',100,'Terminé !');$('modal-close-btn').style.display='block';});
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
-async function boot(){await refreshAuth();await loadLibrary();await loadSettings();await loadDataPath();}
+async function boot(){await refreshAuth();await loadLibrary();await loadSettings();await loadDataPath();await loadMrVersions();mrSearch();}
 boot().catch(e=>console.error('[boot]',e));
 
 })();
