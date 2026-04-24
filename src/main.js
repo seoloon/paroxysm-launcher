@@ -26,12 +26,13 @@ const isDev = process.argv.includes('--dev');
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1200, height: 760,
+    width: 2560, height: 1440,
     minWidth: 900, minHeight: 600,
     frame: false, resizable: true,
     webPreferences: {
       nodeIntegration: false, contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
+      zoomFactor: 1.5
     },
     backgroundColor: '#020617',
     icon: path.join(__dirname, '..', 'assets', 'icon.png'),
