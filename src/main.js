@@ -26,13 +26,12 @@ const isDev = process.argv.includes('--dev');
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 2560, height: 1440,
+    width: 1200, height: 760,
     minWidth: 900, minHeight: 600,
     frame: false, resizable: true,
     webPreferences: {
       nodeIntegration: false, contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
-      zoomFactor: 1.5
     },
     backgroundColor: '#020617',
     icon: path.join(__dirname, '..', 'assets', 'icon.png'),
@@ -57,6 +56,13 @@ ipcMain.on('win:close',    () => mainWindow?.close());
 // config:get handled below (with instance file scanning support)
 ipcMain.handle('config:set', (_, key, value) => { store.set(key, value); return true; });
 ipcMain.handle('app:version', () => app.getVersion());
+
+// ── System info ───────────────────────────────────────────────────────────────
+ipcMain.handle('system:ram', () => {
+  const totalMB = Math.floor(os.totalmem() / 1024 / 1024);
+  const totalGB = totalMB / 1024;
+  return { totalMB, totalGB: Math.round(totalGB * 10) / 10 };
+});
 
 // ── Instance file listing (for play panel "Contenu" tab) ──────────────────────
 ipcMain.handle('config:get', (_, key) => {
@@ -213,15 +219,16 @@ async function modrinthFetch(url) {
   });
 }
 
-ipcMain.handle('modrinth:search', async (_, { query='', type='modpack', offset=0, limit=20, gameVersion='', categories=[] }) => {
+ipcMain.handle('modrinth:search', async (_, { query='', type='modpack', offset=0, limit=20, gameVersion='', loader='', sort='relevance', categories=[] }) => {
   try {
     const facets = [['project_type:'+type]];
     if (gameVersion) facets.push(['versions:'+gameVersion]);
+    if (loader) facets.push(['categories:'+loader]);
     if (categories.length) facets.push(categories.map(c => 'categories:'+c));
     const params = new URLSearchParams({
       query, offset, limit,
       facets: JSON.stringify(facets),
-      index: 'relevance',
+      index: sort || 'relevance',
     });
     return await modrinthFetch(`${MODRINTH_API}/search?${params}`);
   } catch(e) { return { error: e.message, hits: [] }; }
@@ -235,6 +242,14 @@ ipcMain.handle('modrinth:get-project', async (_, id) => {
 ipcMain.handle('modrinth:get-versions', async (_, id) => {
   try { return await modrinthFetch(`${MODRINTH_API}/project/${id}/version`); }
   catch(e) { return { error: e.message }; }
+});
+
+ipcMain.handle('modrinth:get-game-versions', async () => {
+  try {
+    const data = await modrinthFetch(`${MODRINTH_API}/tag/game_version`);
+    // Keep only release versions, sorted newest first
+    return (data || []).filter(v => v.version_type === 'release').map(v => v.version);
+  } catch(e) { return { error: e.message }; }
 });
 
 ipcMain.handle('modrinth:download', async (_, { projectId, versionId, fileName, destDir }) => {
