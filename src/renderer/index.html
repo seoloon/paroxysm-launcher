@@ -367,6 +367,9 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
 .mr-dl-btn:hover{transform:translateY(-1px);box-shadow:0 4px 12px rgba(34,211,238,.3)}
 .mr-dl-btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
 .mr-dl-btn svg{width:14px;height:14px;stroke:currentColor;stroke-width:2}
+.ci-loader-btn{padding:8px 18px;border-radius:var(--r-sm);border:1px solid var(--border);background:transparent;color:var(--text1);font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;font-family:var(--font)}
+.ci-loader-btn:hover{border-color:var(--violet);color:var(--text0)}
+.ci-loader-btn.active{border-color:var(--cyan);background:rgba(34,211,238,.1);color:var(--cyan)}
 </style>
 </head>
 <body>
@@ -375,7 +378,7 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
     <div class="tb-logo">
       <img class="tb-logo-img" src="applogo.png">
       <span class="tb-logo-text">PAROXYSM</span>
-      <span class="tb-version">v0.3.8</span>
+      <span class="tb-version">v0.6.1</span>
     </div>
     <div class="tb-controls">
       <button class="tb-btn" id="btn-min"><svg viewBox="0 0 10 2" fill="currentColor"><rect width="10" height="2"/></svg></button>
@@ -422,10 +425,16 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
       <section class="page active" id="page-library">
         <div class="page-header">
           <div><h1 class="page-title">Bibliothèque</h1><p class="page-sub" id="lib-count">Chargement...</p></div>
-          <button class="btn-primary" id="btn-import">
-            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 3v10M6 9l4 4 4-4"/><path d="M4 15h12" stroke-linecap="round"/></svg>
-            Importer un modpack
-          </button>
+          <div style="display:flex;gap:10px">
+            <button class="btn-secondary" id="btn-create-instance">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="10" cy="10" r="8"/><path d="M10 6v8M6 10h8" stroke-linecap="round"/></svg>
+              Créer une instance
+            </button>
+            <button class="btn-primary" id="btn-import">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 3v10M6 9l4 4 4-4"/><path d="M4 15h12" stroke-linecap="round"/></svg>
+              Importer un modpack
+            </button>
+          </div>
         </div>
         <div class="lib-toolbar">
           <div class="search-wrap">
@@ -807,6 +816,50 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
   </div>
 </div>
 
+<!-- CREATE INSTANCE MODAL -->
+<div id="create-instance-overlay" style="display:none" class="modal-overlay">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-header">
+      <span class="modal-title">Créer une instance</span>
+      <button class="modal-close-btn" id="create-instance-close">✕</button>
+    </div>
+    <div style="padding:28px;display:flex;flex-direction:column;gap:20px">
+      <div class="form-group" style="margin:0">
+        <label class="form-label">Nom de l'instance</label>
+        <input type="text" class="form-input" id="ci-name" placeholder="Mon instance..." maxlength="64"/>
+      </div>
+      <div class="form-group" style="margin:0">
+        <label class="form-label">Version Minecraft</label>
+        <select class="form-input" id="ci-mc-version" style="cursor:pointer">
+          <option value="">Chargement des versions...</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin:0">
+        <label class="form-label">Modloader</label>
+        <div style="display:flex;gap:8px">
+          <button class="ci-loader-btn active" data-loader="fabric">Fabric</button>
+          <button class="ci-loader-btn" data-loader="forge">Forge</button>
+          <button class="ci-loader-btn" data-loader="neoforge">NeoForge</button>
+        </div>
+      </div>
+      <div class="form-group" style="margin:0">
+        <label class="form-label">Version du modloader</label>
+        <select class="form-input" id="ci-loader-version" style="cursor:pointer">
+          <option value="">Sélectionnez d'abord une version MC...</option>
+        </select>
+      </div>
+      <div id="ci-error" style="display:none;padding:10px 14px;background:var(--red-bg);border:1px solid rgba(244,63,94,.3);border-radius:var(--r-sm);color:var(--red);font-size:13px"></div>
+      <div style="display:flex;justify-content:flex-end;gap:10px;padding-top:4px;border-top:1px solid var(--border)">
+        <button class="btn-ghost" id="ci-cancel">Annuler</button>
+        <button class="btn-primary" id="ci-create" disabled>
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="8" cy="8" r="6"/><path d="M8 5v6M5 8h6" stroke-linecap="round"/></svg>
+          Créer
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- INSTALL MODAL -->
 <div id="modal-overlay" style="display:none" class="modal-overlay">
   <div class="modal">
@@ -939,9 +992,14 @@ function renderLibrary(packs){
     const badge={forge:'badge-forge',neoforge:'badge-neoforge',fabric:'badge-fabric',quilt:'badge-quilt'}[p.modloader]||'badge-forge';
     const loaderName={forge:'Forge',neoforge:'NeoForge',fabric:'Fabric',quilt:'Quilt'}[p.modloader]||p.modloader;
     const last=p.lastPlayed?new Date(p.lastPlayed).toLocaleDateString('fr-FR'):'Jamais';
+    const bannerContent = p.iconData
+      ? `<img src="${esc(p.iconData)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit" onerror="this.style.display='none'">`
+      : `<div class="card-letter">${esc(p.name.substring(0,2).toUpperCase())}</div>`;
+    const isCustom = p.format === 'custom';
     return `<div class="modpack-card" data-id="${esc(p.id)}">
-<div class="card-banner"><div class="card-letter">${esc(p.name.substring(0,2).toUpperCase())}</div>
+<div class="card-banner">${bannerContent}
 <span class="card-badge ${badge}">${loaderName}</span>
+${isCustom ? '<span class="card-badge" style="background:rgba(16,185,129,.2);color:var(--green);border-color:rgba(16,185,129,.3);right:auto;left:8px">Custom</span>' : ''}
 <button class="card-del" data-del="${esc(p.id)}"><svg viewBox="0 0 14 14" fill="none"><path d="M2 3.5h10M5 3.5V2.5h4v1M3 3.5l.8 8h6.4l.8-8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
 <button class="card-gear" data-settings="${esc(p.id)}" title="Paramètres du modpack"><svg viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="2"/><path d="M7 1.5v1M7 11.5v1M1.5 7h1M11.5 7h1M3.1 3.1l.7.7M10.2 10.2l.7.7M10.2 3.8l-.7.7M3.8 10.2l-.7.7" stroke-linecap="round"/></svg></button></div>
 <div class="card-body"><div class="card-name" title="${esc(p.name)}">${esc(p.name)}</div>
@@ -1098,7 +1156,8 @@ function renderOverlay(){
     const color=TYPE_COLORS[f.type]||TYPE_COLORS.other;
     const label=TYPE_LABELS[f.type]||'?';
     const size=f.size?formatBytes(f.size):'';
-    return `<div class="co-file-card">
+    const modAttr=f.type==='mod'?` data-modname="${esc(f.name)}" data-modfile="${esc(f.filename||f.name)}"`: '';
+    return `<div class="co-file-card"${modAttr}>
 <div class="co-file-icon" style="background:${color}22;color:${color}">${label}</div>
 <div class="co-file-info">
 <div class="co-file-name" title="${esc(f.name)}">${esc(f.name)}</div>
@@ -1106,6 +1165,9 @@ ${f.filename&&f.filename!==f.name?`<div class="co-file-meta">${esc(f.filename)}$
 :size?`<div class="co-file-meta">${size}</div>`:''}
 </div></div>`;
   }).join('');
+
+  // Async icon enrichment for mods
+  if(shown.some(f=>f.type==='mod')) enrichModIcons($('co-grid'));
 }
 
 // Filtres overlay
@@ -1232,6 +1294,71 @@ function formatBytes(b){
   if(b<1024)return b+'B';
   if(b<1048576)return(b/1024).toFixed(0)+'KB';
   return(b/1048576).toFixed(1)+'MB';
+}
+
+// ── Mod icon enrichment ───────────────────────────────────────────────────────
+// Cache to avoid redundant API calls within a session
+const _modIconCache = {};
+
+async function enrichModIcons(container) {
+  const cards = [...container.querySelectorAll('[data-modname]')];
+  if (!cards.length) return;
+
+  // Batch: collect unique mod names, skip cached ones
+  const toFetch = [];
+  const seen = new Set();
+  for (const card of cards) {
+    const name = card.dataset.modname;
+    if (!seen.has(name) && !_modIconCache[name]) {
+      seen.add(name);
+      toFetch.push(name);
+    }
+  }
+
+  // Fetch in batches of 8 to avoid hammering the API
+  for (let i = 0; i < toFetch.length; i += 8) {
+    const chunk = toFetch.slice(i, i + 8);
+    await Promise.allSettled(chunk.map(async (modName) => {
+      try {
+        // Clean name: strip version numbers and common suffixes from jar filename
+        const cleaned = modName
+          .replace(/[-_][0-9]+\.[0-9]+.*/,'')
+          .replace(/\.(jar|zip)$/i,'')
+          .replace(/[-_](forge|fabric|neoforge|quilt|mc|minecraft).*/i,'')
+          .trim();
+        if (!cleaned || cleaned.length < 2) { _modIconCache[modName] = null; return; }
+
+        const result = await px.modrinth.search({
+          query: cleaned, type: 'mod', limit: 3, sort: 'relevance',
+        });
+        const hits = result?.hits || [];
+        // Pick hit whose slug or title best matches
+        const lc = cleaned.toLowerCase();
+        const best = hits.find(h =>
+          h.slug.toLowerCase() === lc ||
+          h.title.toLowerCase() === lc ||
+          h.title.toLowerCase().startsWith(lc)
+        ) || (hits.length ? hits[0] : null);
+
+        _modIconCache[modName] = best?.icon_url || null;
+      } catch { _modIconCache[modName] = null; }
+    }));
+
+    // After each batch, update all matching cards in the container
+    for (const card of cards) {
+      const name = card.dataset.modname;
+      const iconUrl = _modIconCache[name];
+      if (!iconUrl) continue;
+      const iconEl = card.querySelector('.co-file-icon, .pp-content-icon');
+      if (iconEl && !iconEl.querySelector('img')) {
+        iconEl.innerHTML = `<img src="${esc(iconUrl)}" alt="" width="24" height="24"
+          style="width:24px;height:24px;border-radius:6px;object-fit:cover;display:block"
+          onerror="this.parentElement.innerHTML='${iconEl.textContent||'MOD'}'">`;
+        iconEl.style.background = 'transparent';
+        iconEl.style.padding = '0';
+      }
+    }
+  }
 }
 
 $('btn-play').addEventListener('click',async function(){
@@ -1461,13 +1588,16 @@ function packRenderContent() {
     const color = TYPE_COLORS_PP[f.type] || TYPE_COLORS_PP.other;
     const label = TYPE_LABELS_PP[f.type] || '?';
     const size = f.size ? formatBytes(f.size) : '';
-    return `<div class="pp-content-card">
+    const modAttr = f.type === 'mod' ? ` data-modname="${esc(f.name)}" data-modfile="${esc(f.filename||f.name)}"` : '';
+    return `<div class="pp-content-card"${modAttr}>
 <div class="pp-content-icon" style="background:${color}22;color:${color}">${label}</div>
 <div style="flex:1;min-width:0">
 <div class="pp-content-name" title="${esc(f.name)}">${esc(f.name)}</div>
 ${f.filename && f.filename !== f.name ? `<div class="pp-content-meta">${esc(f.filename)}${size ? ' · ' + size : ''}</div>` : size ? `<div class="pp-content-meta">${size}</div>` : ''}
 </div></div>`;
   }).join('');
+
+  if (shown.some(f => f.type === 'mod')) enrichModIcons(grid);
 }
 
 $('pack-resolve-btn').addEventListener('click', async function() {
@@ -2002,6 +2132,131 @@ px.on('install:progress',({step,pct,detail})=>updateStep(step,pct,detail));
 px.on('install:log',msg=>appendLog(msg));
 px.on('install:error',msg=>showModalError(msg));
 px.on('install:done',()=>{updateStep('done',100,'Terminé !');$('modal-close-btn').style.display='block';});
+
+// ── Icon fetch after import ───────────────────────────────────────────────────
+// After a modpack is added to library, if it has no icon try to fetch one from Modrinth
+px.on('install:done', async (entry) => {
+  if (entry && !entry.iconData && entry.format !== 'custom') {
+    try {
+      const result = await px.modpack.fetchIcon({ format: entry.format, name: entry.name });
+      if (result?.ok && result.iconUrl) {
+        // Download the icon as base64 via fetch in renderer
+        const resp = await fetch(result.iconUrl);
+        const blob = await resp.blob();
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+          await px.library.update(entry.id, { iconData: e.target.result });
+          // Refresh library silently
+          loadLibrary();
+        };
+        reader.readAsDataURL(blob);
+      }
+    } catch {}
+  }
+});
+
+// ── Create Instance ───────────────────────────────────────────────────────────
+let ciLoader = 'fabric';
+let ciMcVersionsLoaded = false;
+
+function openCreateInstanceModal() {
+  $('ci-name').value = '';
+  $('ci-error').style.display = 'none';
+  $('ci-create').disabled = true;
+  $('create-instance-overlay').style.display = 'flex';
+
+  // Load MC versions once
+  if (!ciMcVersionsLoaded) {
+    loadCiMcVersions();
+  }
+}
+
+async function loadCiMcVersions() {
+  const sel = $('ci-mc-version');
+  sel.innerHTML = '<option value="">Chargement...</option>';
+  const versions = await px.instance.getMcVersions();
+  if (!Array.isArray(versions)) {
+    sel.innerHTML = '<option value="">Erreur de chargement</option>';
+    return;
+  }
+  sel.innerHTML = '<option value="">Sélectionnez une version...</option>';
+  versions.forEach(v => {
+    const opt = document.createElement('option');
+    opt.value = v; opt.textContent = v;
+    sel.appendChild(opt);
+  });
+  ciMcVersionsLoaded = true;
+}
+
+async function loadCiLoaderVersions() {
+  const mcVersion = $('ci-mc-version').value;
+  const loaderSel = $('ci-loader-version');
+  if (!mcVersion) {
+    loaderSel.innerHTML = '<option value="">Sélectionnez d\'abord une version MC...</option>';
+    $('ci-create').disabled = true;
+    return;
+  }
+  loaderSel.innerHTML = '<option value="">Chargement des versions...</option>';
+  $('ci-create').disabled = true;
+
+  const versions = await px.instance.getLoaderVersions(ciLoader, mcVersion);
+  if (!Array.isArray(versions) || versions.length === 0) {
+    loaderSel.innerHTML = '<option value="">Aucune version disponible</option>';
+    return;
+  }
+  loaderSel.innerHTML = '';
+  versions.forEach((v, i) => {
+    const opt = document.createElement('option');
+    opt.value = v; opt.textContent = v;
+    if (i === 0) opt.selected = true;
+    loaderSel.appendChild(opt);
+  });
+  $('ci-create').disabled = !$('ci-name').value.trim();
+}
+
+$('ci-mc-version').addEventListener('change', loadCiLoaderVersions);
+$('ci-name').addEventListener('input', () => {
+  const hasName = !!$('ci-name').value.trim();
+  const hasVersion = !!$('ci-loader-version').value;
+  $('ci-create').disabled = !hasName || !hasVersion;
+});
+
+document.querySelectorAll('.ci-loader-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.ci-loader-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    ciLoader = btn.dataset.loader;
+    if ($('ci-mc-version').value) loadCiLoaderVersions();
+  });
+});
+
+$('btn-create-instance').addEventListener('click', openCreateInstanceModal);
+$('create-instance-close').addEventListener('click', () => { $('create-instance-overlay').style.display='none'; });
+$('ci-cancel').addEventListener('click', () => { $('create-instance-overlay').style.display='none'; });
+
+$('ci-create').addEventListener('click', async () => {
+  const name = $('ci-name').value.trim();
+  const mcVersion = $('ci-mc-version').value;
+  const loaderVersion = $('ci-loader-version').value;
+  if (!name || !mcVersion || !loaderVersion) return;
+
+  $('create-instance-overlay').style.display = 'none';
+  isInstalling = true;
+  $('modal-title').textContent = `Création — ${name}`;
+  $('modal-log').innerHTML = '';
+  $('modal-close-btn').style.display = 'none';
+  STEPS.forEach(s=>{$('istep-'+s)?.setAttribute('class','istep');const d=$('istep-'+s+'-detail');if(d)d.textContent='En attente...';const p=$('istep-'+s+'-pct');if(p)p.textContent='';});
+  $('modal-overlay').style.display = 'flex';
+
+  const result = await px.instance.create({ name, mcVersion, loader: ciLoader, loaderVersion });
+  isInstalling = false;
+  if (!result.ok) {
+    showModalError(result.error);
+  } else {
+    $('modal-close-btn').style.display = 'block';
+    await loadLibrary();
+  }
+});
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 async function boot(){await refreshAuth();await loadLibrary();await loadSettings();await loadDataPath();await loadMrVersions();mrSearch();}
