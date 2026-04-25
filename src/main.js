@@ -21,12 +21,25 @@ const auth    = new MicrosoftAuth(store);
 const library = new ModpackLibrary(store);
 store.set('__dataPath__', Store.BASE_DIR);
 
+/**
+ * Load the cached Mojang version.json for a given MC version.
+ * Used at launch time to get javaVersion.majorVersion without re-downloading.
+ * Returns null if not yet cached (will fall back to table in JavaManager).
+ */
+function loadVanillaProfile(mcVersion) {
+  try {
+    const jsonPath = path.join(Store.BASE_DIR, 'minecraft', 'versions', mcVersion, `${mcVersion}.json`);
+    if (fs.existsSync(jsonPath)) return JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+  } catch {}
+  return null;
+}
+
 let mainWindow = null;
 const isDev = process.argv.includes('--dev');
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1200, height: 760,
+    width: 1200, height: 720,
     minWidth: 900, minHeight: 600,
     frame: false, resizable: true,
     webPreferences: {
@@ -359,21 +372,21 @@ ipcMain.handle('modpack:import', async (_, filePath) => {
     send('install:log', `✓ ${parsed.name} v${parsed.version} [${parsed.format.toUpperCase()}]`);
     send('install:log', `  MC ${parsed.mcVersion} — ${parsed.modloader} ${parsed.modloaderVersion} — ${parsed.files.length} fichiers`);
 
-    // 2. Java
-    send('install:progress', { step: 'java', pct: 0, detail: 'Vérification Java...' });
-    const javaPath = await JavaManager.ensureJava(parsed.mcVersion, (pct, detail) => {
-      send('install:progress', { step: 'java', pct, detail });
-    });
-    send('install:log', `✓ Java: ${javaPath}`);
-    send('install:progress', { step: 'java', pct: 100, detail: 'Java prêt' });
-
-    // 3. Vanilla Minecraft
+    // 2. Vanilla Minecraft first — we need the profile to know the required Java version
     send('install:progress', { step: 'modloader', pct: 0, detail: `Minecraft ${parsed.mcVersion}...` });
-    await MinecraftManager.ensureVanilla(parsed.mcVersion, (pct, detail) => {
+    const { profile: vanillaProfile } = await MinecraftManager.ensureVanilla(parsed.mcVersion, (pct, detail) => {
       send('install:progress', { step: 'modloader', pct: Math.round(pct * 0.4), detail });
       if (detail && !detail.includes('%')) send('install:log', detail);
     });
     send('install:log', `✓ Minecraft ${parsed.mcVersion} client OK`);
+
+    // 3. Java — now we can read javaVersion.majorVersion from the Mojang profile
+    send('install:progress', { step: 'java', pct: 0, detail: 'Vérification Java...' });
+    const javaPath = await JavaManager.ensureJava(parsed.mcVersion, (pct, detail) => {
+      send('install:progress', { step: 'java', pct, detail });
+    }, vanillaProfile);
+    send('install:log', `✓ Java: ${javaPath}`);
+    send('install:progress', { step: 'java', pct: 100, detail: 'Java prêt' });
 
     // 4. Modloader
     const loaderLabel = parsed.modloader.charAt(0).toUpperCase() + parsed.modloader.slice(1);
@@ -436,7 +449,9 @@ ipcMain.handle('game:launch', async (_, modpackId) => {
     const forceOffline = settings.forceOffline || false;
     const useOnline    = profile && !forceOffline;
 
-    const javaPath = await JavaManager.ensureJava(entry.mcVersion, () => {});
+    // Load vanilla profile to get javaVersion.majorVersion for correct Java selection
+    const vanillaProfile = loadVanillaProfile(entry.mcVersion);
+    const javaPath = await JavaManager.ensureJava(entry.mcVersion, () => {}, vanillaProfile);
 
     // Use per-instance RAM if set, otherwise fall back to global setting
     const instanceRam = entry.ram || 0;
@@ -465,4 +480,125 @@ ipcMain.handle('game:launch', async (_, modpackId) => {
     console.error('[launch]', e);
     return { ok: false, error: e.message };
   }
+});
+
+// ── Instance creation ─────────────────────────────────────────────────────────
+
+ipcMain.handle('instance:get-mc-versions', async () => {
+  try {
+    const { fetchJSON } = require('./core/utils/download');
+    const manifest = await fetchJSON('https://piston-meta.mojang.com/mc/game/version_manifest_v2.json');
+    return manifest.versions
+      .filter(v => v.type === 'release')
+      .map(v => v.id);
+  } catch(e) { return { error: e.message }; }
+});
+
+ipcMain.handle('instance:get-loader-versions', async (_, { loader, mcVersion }) => {
+  try {
+    const { fetchJSON } = require('./core/utils/download');
+    if (loader === 'fabric') {
+      const data = await fetchJSON(`https://meta.fabricmc.net/v2/versions/loader/${mcVersion}`);
+      return (data || []).map(v => v.loader.version);
+    }
+    if (loader === 'neoforge') {
+      const xml = await fetchXML('https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml');
+      return parseXMLVersions(xml).reverse();
+    }
+    if (loader === 'forge') {
+      const xml = await fetchXML('https://files.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml');
+      const all = parseXMLVersions(xml);
+      return all.filter(v => v.startsWith(mcVersion + '-')).map(v => v.replace(mcVersion + '-', '')).reverse();
+    }
+    return [];
+  } catch(e) { return { error: e.message }; }
+});
+
+async function fetchXML(url) {
+  const https = require('follow-redirects').https;
+  return new Promise((resolve, reject) => {
+    https.get(url, {
+      headers: { 'User-Agent': 'PaROXYSM-Launcher/1.0' },
+      maxRedirects: 10, timeout: 20000,
+    }, res => {
+      let data = '';
+      res.on('data', d => { data += d; });
+      res.on('end', () => resolve(data));
+    }).on('error', reject);
+  });
+}
+
+function parseXMLVersions(xml) {
+  const matches = [...xml.matchAll(/<version>([^<]+)<\/version>/g)];
+  return matches.map(m => m[1].trim()).filter(Boolean);
+}
+
+ipcMain.handle('instance:create', async (_, { name, mcVersion, loader, loaderVersion }) => {
+  try {
+    send('install:log', `Création de l'instance "${name}"...`);
+
+    // Vanilla first — need the profile for correct Java version detection
+    send('install:progress', { step: 'modloader', pct: 0, detail: `Minecraft ${mcVersion}...` });
+    const { profile: vanillaProfile } = await MinecraftManager.ensureVanilla(mcVersion, (pct, detail) => {
+      send('install:progress', { step: 'modloader', pct: Math.round(pct * 0.4), detail });
+      if (detail && !detail.includes('%')) send('install:log', detail);
+    });
+
+    send('install:progress', { step: 'java', pct: 0, detail: 'Vérification Java...' });
+    const javaPath = await JavaManager.ensureJava(mcVersion, (pct, detail) => {
+      send('install:progress', { step: 'java', pct, detail });
+    }, vanillaProfile);
+    send('install:log', `✓ Java: ${javaPath}`);
+    send('install:progress', { step: 'java', pct: 100, detail: 'Java prêt' });
+
+    const loaderLabel = loader.charAt(0).toUpperCase() + loader.slice(1);
+    send('install:progress', { step: 'modloader', pct: 40, detail: `Installation ${loaderLabel}...` });
+    let versionId;
+    const loaderProgress = (pct, detail) => {
+      send('install:progress', { step: 'modloader', pct: 40 + Math.round(pct * 0.6), detail });
+      if (detail) send('install:log', detail);
+    };
+    if (loader === 'fabric' || loader === 'quilt') {
+      versionId = await FabricManager.ensure(mcVersion, loaderVersion, javaPath, loaderProgress);
+    } else {
+      versionId = await ForgeManager.ensure(mcVersion, loaderVersion, javaPath, loaderProgress, loader);
+    }
+
+    send('install:progress', { step: 'mods', pct: 100, detail: 'Instance vide (aucun mod)' });
+    send('install:progress', { step: 'overrides', pct: 100, detail: 'Prêt' });
+
+    const sanitize = n => (n||'instance').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9_\-. ]/g,'').replace(/\s+/g,'_').slice(0,64)||'instance';
+    const instanceDir = path.join(Store.BASE_DIR, 'instances', sanitize(name));
+    fs.mkdirSync(path.join(instanceDir, 'mods'), { recursive: true });
+
+    const parsed = {
+      name, version: '1.0', author: '', mcVersion,
+      modloader: loader, modloaderVersion: loaderVersion,
+      format: 'custom', files: [], iconData: null, tmpDir: null,
+    };
+    const entry = library.add(parsed, [], versionId);
+
+    send('install:progress', { step: 'done', pct: 100, detail: 'Instance créée !' });
+    send('install:done', entry);
+    send('install:log', `✅ Instance "${name}" prête !`);
+    return { ok: true, entry };
+  } catch(e) {
+    send('install:error', e.message);
+    console.error('[instance:create]', e);
+    return { ok: false, error: e.message };
+  }
+});
+
+// ── Modpack icon fetch ────────────────────────────────────────────────────────
+ipcMain.handle('modpack:fetch-icon', async (_, { format, name }) => {
+  try {
+    const q = encodeURIComponent(name);
+    const data = await modrinthFetch(`${MODRINTH_API}/search?query=${q}&facets=${encodeURIComponent(JSON.stringify([["project_type:modpack"]]))}&limit=5`);
+    if (data.hits?.length) {
+      const nameLower = name.toLowerCase().split(' ')[0];
+      const best = data.hits.find(h => h.title.toLowerCase().includes(nameLower)) || data.hits[0];
+      if (best?.icon_url) return { ok: true, iconUrl: best.icon_url };
+    }
+    return { ok: false };
+  } catch(e) { return { ok: false }; }
 });
