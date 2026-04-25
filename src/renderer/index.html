@@ -370,6 +370,15 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
 .ci-loader-btn{padding:8px 18px;border-radius:var(--r-sm);border:1px solid var(--border);background:transparent;color:var(--text1);font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;font-family:var(--font)}
 .ci-loader-btn:hover{border-color:var(--violet);color:var(--text0)}
 .ci-loader-btn.active{border-color:var(--cyan);background:rgba(34,211,238,.1);color:var(--cyan)}
+.inst-pick-card{display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--bg1);border:1px solid var(--border);border-radius:var(--r-md);cursor:pointer;transition:all .2s;user-select:none}
+.inst-pick-card:hover{border-color:var(--cyan);background:rgba(34,211,238,.05);transform:translateX(2px)}
+.inst-pick-card:active{transform:translateX(0)}
+.inst-pick-icon{width:38px;height:38px;border-radius:10px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;background:var(--bg2)}
+.inst-pick-name{font-size:13px;font-weight:600;color:var(--text0);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.inst-pick-meta{font-size:11px;color:var(--text2);margin-top:2px}
+.inst-pick-badge{font-size:10px;padding:2px 7px;border-radius:10px;font-weight:700;flex-shrink:0;margin-left:auto}
+.inst-pick-incompatible{opacity:.38;cursor:not-allowed}
+.inst-pick-incompatible:hover{transform:none;border-color:var(--border);background:var(--bg1)}
 </style>
 </head>
 <body>
@@ -378,7 +387,7 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
     <div class="tb-logo">
       <img class="tb-logo-img" src="applogo.png">
       <span class="tb-logo-text">PAROXYSM</span>
-      <span class="tb-version">v0.6.1</span>
+      <span class="tb-version">v0.7.0</span>
     </div>
     <div class="tb-controls">
       <button class="tb-btn" id="btn-min"><svg viewBox="0 0 10 2" fill="currentColor"><rect width="10" height="2"/></svg></button>
@@ -882,6 +891,26 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
       <button class="modal-close-btn" id="mr-detail-close">✕</button>
     </div>
     <div id="mr-detail-content" style="padding:0 24px 24px"></div>
+  </div>
+</div>
+
+<!-- INSTANCE PICKER MODAL -->
+<div id="inst-pick-overlay" style="display:none" class="modal-overlay">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-header">
+      <span class="modal-title" id="inst-pick-title">Choisir une instance</span>
+      <button class="modal-close-btn" id="inst-pick-close">✕</button>
+    </div>
+    <div style="padding:20px 24px 24px;display:flex;flex-direction:column;gap:14px">
+      <p style="margin:0;font-size:13px;color:var(--text1)" id="inst-pick-subtitle"></p>
+      <div id="inst-pick-list" style="display:flex;flex-direction:column;gap:8px;max-height:340px;overflow-y:auto"></div>
+      <div id="inst-pick-empty" style="display:none;padding:20px;text-align:center;color:var(--text2);font-size:13px">
+        <div style="font-size:28px;margin-bottom:8px">😕</div>
+        Aucune instance compatible trouvée.<br>
+        <span style="font-size:12px;color:var(--text2);margin-top:4px;display:block">Vérifiez la version MC et le modloader.</span>
+      </div>
+      <button class="btn-ghost" id="inst-pick-cancel" style="align-self:flex-end">Annuler</button>
+    </div>
   </div>
 </div>
 
@@ -2092,32 +2121,202 @@ ${versionsSection}
   $('mr-dv-mc')?.addEventListener('change', filterDetailVersions);
   $('mr-dv-loader')?.addEventListener('change', filterDetailVersions);
 
-  // Download buttons
+  // Download buttons — intercept non-modpacks for instance picking
   $('mr-detail-content').querySelectorAll('.mr-dl-btn').forEach(btn=>{
     btn.addEventListener('click',async()=>{
-      btn.disabled=true;btn.innerHTML='<div class="spinner" style="width:14px;height:14px;border-width:2px;display:inline-block"></div>';
-      const Store=await px.config.get('__dataPath__');
-      const destDir=Store ? Store+'/downloads' : '.';
-      const result=await px.modrinth.download({projectId:btn.dataset.pid,versionId:btn.dataset.vid,fileName:btn.dataset.fname,destDir});
-      if(result.ok){
-        btn.innerHTML='✓ Téléchargé';btn.style.background='var(--green)';
-        // Si c'est un .mrpack, proposer de l'importer
-        if(result.filename?.endsWith('.mrpack')){
-          setTimeout(()=>{
-            if(confirm('"'+result.filename+'" téléchargé !\nImporter ce modpack maintenant ?')){
-              $('mr-detail-overlay').style.display='none';
-              isInstalling=true;openInstallModal(result.path);
-              px.modpack.import(result.path).then(r=>{
-                isInstalling=false;
-                if(!r.ok)showModalError(r.error);
-                else{$('modal-close-btn').style.display='block';loadLibrary();}
-              });
-            }
-          },300);
+      const projectType = project.project_type || mrState.type;
+      const isModpack   = projectType === 'modpack';
+
+      if (isModpack) {
+        // Modpacks: direct download + import prompt (original flow)
+        await handleModpackDownload(btn);
+      } else {
+        // Mods, shaders, resourcepacks → pick an instance first
+        const versionObj = allVersions.find(v => v.id === btn.dataset.vid);
+        await handleContentDownload(btn, project, versionObj, projectType);
+      }
+    });
+  });
+}
+
+// ── Modpack download (original flow) ─────────────────────────────────────────
+async function handleModpackDownload(btn) {
+  btn.disabled=true;
+  btn.innerHTML='<div class="spinner" style="width:14px;height:14px;border-width:2px;display:inline-block"></div>';
+  const dataPath = await px.config.get('__dataPath__');
+  const destDir  = dataPath ? dataPath+'/downloads' : '.';
+  const result   = await px.modrinth.download({
+    projectId: btn.dataset.pid, versionId: btn.dataset.vid,
+    fileName: btn.dataset.fname, destDir,
+  });
+  if (result.ok) {
+    btn.innerHTML='✓ Téléchargé'; btn.style.background='var(--green)';
+    if (result.filename?.endsWith('.mrpack')) {
+      setTimeout(()=>{
+        if(confirm('"'+result.filename+'" téléchargé !\nImporter ce modpack maintenant ?')){
+          $('mr-detail-overlay').style.display='none';
+          isInstalling=true; openInstallModal(result.path);
+          px.modpack.import(result.path).then(r=>{
+            isInstalling=false;
+            if(!r.ok) showModalError(r.error);
+            else { $('modal-close-btn').style.display='block'; loadLibrary(); }
+          });
         }
-      }else{
-        btn.disabled=false;btn.innerHTML='<svg viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6l3 3 3-3" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 11h10" stroke-linecap="round"/></svg> Réessayer';
-        alert('Erreur: '+(result.error||'inconnue'));
+      }, 300);
+    }
+  } else {
+    btn.disabled=false;
+    btn.innerHTML='<svg viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6l3 3 3-3" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 11h10" stroke-linecap="round"/></svg> Réessayer';
+    alert('Erreur: '+(result.error||'inconnue'));
+  }
+}
+
+// ── Instance picker for mods / shaders / resourcepacks ────────────────────────
+
+// Subfolder inside the instance gameDir for each project type
+const CONTENT_SUBDIR = {
+  mod:          'mods',
+  shader:       'shaderpacks',
+  resourcepack: 'resourcepacks',
+  datapack:     'datapacks',
+};
+
+const CONTENT_LABEL = {
+  mod:          'mod',
+  shader:       'shader',
+  resourcepack: 'resource pack',
+  datapack:     'data pack',
+};
+
+const LOADER_COMPAT = {
+  // Fabric/Quilt mods run on both
+  fabric: ['fabric', 'quilt'],
+  quilt:  ['fabric', 'quilt'],
+  forge:  ['forge', 'neoforge'],
+  neoforge: ['forge', 'neoforge'],
+};
+
+function isVersionCompatible(entry, versionObj) {
+  if (!versionObj) return { ok: false, reason: 'Version inconnue' };
+
+  const vMcVersions = versionObj.game_versions || [];
+  const vLoaders    = versionObj.loaders || [];
+
+  // MC version check
+  const mcOk = !vMcVersions.length || vMcVersions.includes(entry.mcVersion);
+
+  // Loader check — shaders have no loader constraint in Modrinth (loaders=[])
+  const isShader = vLoaders.length === 0 || vLoaders.includes('iris') || vLoaders.includes('optifine');
+  const loaderOk = isShader ||
+    !vLoaders.length ||
+    vLoaders.some(l => (LOADER_COMPAT[entry.modloader] || [entry.modloader]).includes(l));
+
+  if (!mcOk) return { ok: false, reason: `MC ${vMcVersions.slice(0,3).join(', ')} requis` };
+  if (!loaderOk) return { ok: false, reason: `Loader: ${vLoaders.join('/')} requis` };
+  return { ok: true };
+}
+
+async function handleContentDownload(btn, project, versionObj, projectType) {
+  const typeLabel = CONTENT_LABEL[projectType] || 'fichier';
+  const subdir    = CONTENT_SUBDIR[projectType] || 'mods';
+  const instances = await px.library.list();
+
+  if (!instances.length) {
+    alert('Aucune instance installée. Créez ou importez un modpack d\'abord.');
+    return;
+  }
+
+  // Annotate each instance with compatibility
+  const annotated = instances.map(inst => ({
+    ...inst,
+    compat: isVersionCompatible(inst, versionObj),
+  }));
+
+  const compatible   = annotated.filter(i => i.compat.ok);
+  const incompatible = annotated.filter(i => !i.compat.ok);
+
+  // Show picker modal
+  $('inst-pick-title').textContent = `Installer dans une instance`;
+  $('inst-pick-subtitle').textContent =
+    `Où souhaitez-vous installer ce ${typeLabel} ?\n` +
+    (versionObj ? `(${project.title} · MC ${(versionObj.game_versions||[]).slice(0,3).join(', ')||'?'})` : '');
+
+  const list  = $('inst-pick-list');
+  const empty = $('inst-pick-empty');
+
+  if (!compatible.length && !incompatible.length) {
+    list.innerHTML = ''; empty.style.display = 'block';
+  } else {
+    empty.style.display = 'none';
+    const loaderColors = {
+      forge:'rgba(178,96,44,.15)', neoforge:'rgba(211,138,60,.15)',
+      fabric:'rgba(178,199,111,.15)', quilt:'rgba(178,111,199,.15)',
+    };
+    const loaderText = { forge:'#B2602C', neoforge:'#D38A3C', fabric:'#B2C76F', quilt:'#B26FC7' };
+    const loaderName = { forge:'Forge', neoforge:'NeoForge', fabric:'Fabric', quilt:'Quilt' };
+
+    const renderCard = (inst, compat) => {
+      const lc   = inst.modloader?.toLowerCase() || '';
+      const lbg  = loaderColors[lc]  || 'rgba(100,116,139,.15)';
+      const ltxt = loaderText[lc]    || 'var(--text2)';
+      const lname= loaderName[lc]    || inst.modloader;
+      const iconHtml = inst.iconData
+        ? `<img src="${esc(inst.iconData)}" style="width:38px;height:38px;border-radius:10px;object-fit:cover">`
+        : `<div class="inst-pick-icon" style="background:${lbg};color:${ltxt}">${esc((inst.name||'?').substring(0,2).toUpperCase())}</div>`;
+
+      const incompClass = compat.ok ? '' : ' inst-pick-incompatible';
+      const reasonTag   = compat.ok ? '' :
+        `<span style="font-size:10px;color:var(--text2);margin-left:auto;flex-shrink:0">${esc(compat.reason)}</span>`;
+
+      return `<div class="inst-pick-card${incompClass}" data-id="${esc(inst.id)}" data-compat="${compat.ok}" data-gamedir="${esc(inst.gameDir)}" data-subdir="${subdir}">
+  ${iconHtml}
+  <div style="flex:1;min-width:0">
+    <div class="inst-pick-name">${esc(inst.customName||inst.name)}</div>
+    <div class="inst-pick-meta">MC ${esc(inst.mcVersion)} · ${esc(lname)} ${esc(inst.modloaderVersion||'')}</div>
+  </div>
+  ${reasonTag}
+  <span class="inst-pick-badge" style="background:${lbg};color:${ltxt}">${esc(lname)}</span>
+</div>`;
+    };
+
+    list.innerHTML =
+      compatible.map(i => renderCard(i, i.compat)).join('') +
+      (incompatible.length ? `
+        <div style="font-size:11px;color:var(--text2);padding:10px 4px 4px;font-weight:600;letter-spacing:.5px;text-transform:uppercase">
+          Incompatibles
+        </div>` + incompatible.map(i => renderCard(i, i.compat)).join('') : '');
+  }
+
+  $('inst-pick-overlay').style.display = 'flex';
+
+  // Wire up card clicks (only compatible ones)
+  list.querySelectorAll('.inst-pick-card[data-compat="true"]').forEach(card => {
+    card.addEventListener('click', async () => {
+      // Close picker
+      $('inst-pick-overlay').style.display = 'none';
+
+      // Mark the original button as downloading
+      btn.disabled = true;
+      btn.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:2px;display:inline-block"></div>';
+
+      const destDir = card.dataset.gamedir + '/' + card.dataset.subdir;
+      const instName = allPacks.find(p => p.id === card.dataset.id)?.name || card.dataset.id;
+
+      const result = await px.modrinth.download({
+        projectId: btn.dataset.pid,
+        versionId: btn.dataset.vid,
+        fileName:  btn.dataset.fname,
+        destDir,
+      });
+
+      if (result.ok) {
+        btn.innerHTML = `✓ → ${esc(instName)}`;
+        btn.style.background = 'var(--green)';
+        btn.style.fontSize   = '11px';
+      } else {
+        btn.disabled = false;
+        btn.innerHTML = '<svg viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6l3 3 3-3" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 11h10" stroke-linecap="round"/></svg> Réessayer';
+        alert('Erreur: ' + (result.error || 'inconnue'));
       }
     });
   });
@@ -2125,6 +2324,9 @@ ${versionsSection}
 
 $('mr-detail-close').addEventListener('click',()=>{$('mr-detail-overlay').style.display='none';});
 $('mr-detail-overlay').addEventListener('click',e=>{if(e.target===$('mr-detail-overlay'))$('mr-detail-overlay').style.display='none';});
+$('inst-pick-close').addEventListener('click',()=>{$('inst-pick-overlay').style.display='none';});
+$('inst-pick-cancel').addEventListener('click',()=>{$('inst-pick-overlay').style.display='none';});
+$('inst-pick-overlay').addEventListener('click',e=>{if(e.target===$('inst-pick-overlay'))$('inst-pick-overlay').style.display='none';});
 $('modal-overlay').addEventListener('click',e=>{if(e.target===$('modal-overlay'))$('modal-overlay').style.display='none';});
 
 // ── IPC ───────────────────────────────────────────────────────────────────────
