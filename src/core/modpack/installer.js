@@ -74,6 +74,7 @@ class ModpackInstaller {
     if (items.length === 0) { onEach(0, 0, 'Aucun mod'); return []; }
 
     let done = 0;
+    const integrityFailed = [];
     const failed = await downloadBatch(items, 3, (item, err) => {
       done++;
       const label = item.displayName || path.basename(item.dest);
@@ -85,8 +86,7 @@ class ModpackInstaller {
           // Remove the corrupted/tampered file
           try { fs.unlinkSync(item.dest); } catch {}
           err = new Error(integrityErr);
-          // Patch the failed list retroactively (downloadBatch already returned null for err)
-          // We emit the error to the caller via onEach so it shows in the UI
+          integrityFailed.push({ ...item, error: integrityErr });
         }
       }
 
@@ -99,7 +99,7 @@ class ModpackInstaller {
     });
 
     this._saveManifest();
-    return failed;
+    return [...failed, ...integrityFailed];
   }
 
   // ── CurseForge ─────────────────────────────────────────────────────────────
