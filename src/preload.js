@@ -37,8 +37,9 @@ contextBridge.exposeInMainWorld('px', {
     update: (id, fields)  => ipcRenderer.invoke('library:update', id, fields),
   },
   logs: {
-    list:   packId  => ipcRenderer.invoke('modpack:get-logs', packId),
-    read:   logPath => ipcRenderer.invoke('modpack:read-log', logPath),
+    list:   packId            => ipcRenderer.invoke('modpack:get-logs', packId),
+    // SECURITY FIX: pass { packId, logPath } so main process can validate the path
+    read:   (packId, logPath) => ipcRenderer.invoke('modpack:read-log', { packId, logPath }),
   },
   game: {
     launch: id => ipcRenderer.invoke('game:launch', id),
