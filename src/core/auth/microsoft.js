@@ -2,28 +2,24 @@
 /**
  * Microsoft Authentication — Authorization Code Flow avec redirect localhost
  *
- * Utilisé par tous les launchers Minecraft tiers sérieux (Prism, MultiMC…).
- * Avantages vs Device Code Flow :
- *  - Pas d'app vérifiée requise
- *  - Pas d'écran d'avertissement Microsoft
- *  - Flux standard, reconnu par Microsoft pour les apps natives
+ * SECURITY FIX [Critique] : Les tokens sensibles (msRefreshToken, mcAccessToken)
+ * sont désormais chiffrés au repos via electron.safeStorage (DPAPI sur Windows,
+ * Keychain sur macOS, libsecret/kwallet sur Linux).
+ * Le store JSON ne conserve plus que les métadonnées non-sensibles (profil, expiresAt).
  *
- * Flux :
- *  1. Lancer un serveur HTTP temporaire sur localhost:PORT
- *  2. Ouvrir le navigateur → URL d'auth Microsoft
- *  3. L'utilisateur se connecte, Microsoft redirige vers localhost:PORT/callback
- *  4. Récupérer le `code` dans l'URL de callback
- *  5. Échanger le code contre des tokens
- *  6. Chaîne XBL → XSTS → Minecraft
+ * Clés introduites dans le store :
+ *   auth            → { expiresAt, profile }        (non-sensible, JSON)
+ *   auth_enc_rt     → Buffer chiffré (refreshToken)  (safeStorage)
+ *   auth_enc_at     → Buffer chiffré (accessToken)   (safeStorage)
  *
- * Dans Azure/Entra ID :
- *  - URI de redirection : http://localhost:3000/callback  (type : Web OU natif)
+ * Rétrocompatibilité : si des tokens en clair existent déjà dans le store,
+ * ils sont migrés automatiquement au premier démarrage puis supprimés.
  */
 
-const fetch  = require('node-fetch');
-const http   = require('http');
-const crypto = require('crypto');
-const { shell } = require('electron');
+const fetch   = require('node-fetch');
+const http    = require('http');
+const crypto  = require('crypto');
+const { shell, safeStorage } = require('electron');
 
 const CLIENT_ID    = '17e9ab18-295d-4fa9-85d4-c74fae7d184e';
 const REDIRECT_URI = 'http://localhost:3000/callback';
@@ -31,36 +27,87 @@ const SCOPE        = 'XboxLive.signin offline_access';
 const TENANT       = 'consumers';
 const PORT         = 3000;
 
-const MS_AUTH_BASE  = `https://login.microsoftonline.com/${TENANT}/oauth2/v2.0`;
-const XBL_AUTH      = 'https://user.auth.xboxlive.com/user/authenticate';
-const XSTS_AUTH     = 'https://xsts.auth.xboxlive.com/xsts/authorize';
-const MC_LOGIN      = 'https://api.minecraftservices.com/authentication/login_with_xbox';
-const MC_PROFILE    = 'https://api.minecraftservices.com/minecraft/profile';
+const MS_AUTH_BASE   = `https://login.microsoftonline.com/${TENANT}/oauth2/v2.0`;
+const XBL_AUTH       = 'https://user.auth.xboxlive.com/user/authenticate';
+const XSTS_AUTH      = 'https://xsts.auth.xboxlive.com/xsts/authorize';
+const MC_LOGIN       = 'https://api.minecraftservices.com/authentication/login_with_xbox';
+const MC_PROFILE     = 'https://api.minecraftservices.com/minecraft/profile';
 const MC_ENTITLEMENT = 'https://api.minecraftservices.com/entitlements/mcstore';
+
+// Keys used in the store
+const KEY_AUTH_META = 'auth';          // { expiresAt, profile }
+const KEY_ENC_RT    = 'auth_enc_rt';   // encrypted refresh token (hex-encoded Buffer)
+const KEY_ENC_AT    = 'auth_enc_at';   // encrypted access token  (hex-encoded Buffer)
 
 class MicrosoftAuth {
   constructor(store) {
     this._store  = store;
     this._server = null;
+    this._migrateIfNeeded();
+  }
+
+  // ── Migration des tokens en clair (rétrocompatibilité) ──────────────────
+  _migrateIfNeeded() {
+    if (!safeStorage.isEncryptionAvailable()) return;
+
+    const stored = this._store.get(KEY_AUTH_META);
+    // Ancien format : le store contenait msRefreshToken / mcAccessToken en clair
+    if (stored?.msRefreshToken || stored?.mcAccessToken) {
+      console.log('[auth] Migrating plaintext tokens → safeStorage');
+      try {
+        if (stored.msRefreshToken) this._storeEncrypted(KEY_ENC_RT, stored.msRefreshToken);
+        if (stored.mcAccessToken)  this._storeEncrypted(KEY_ENC_AT, stored.mcAccessToken);
+        // Réécrire le meta sans les tokens sensibles
+        const { msRefreshToken, mcAccessToken, ...safe } = stored;
+        this._store.set(KEY_AUTH_META, safe);
+      } catch (e) {
+        console.warn('[auth] Migration failed, clearing auth state:', e.message);
+        this.logout();
+      }
+    }
+  }
+
+  // ── Chiffrement / déchiffrement ──────────────────────────────────────────
+  _storeEncrypted(key, plaintext) {
+    if (!safeStorage.isEncryptionAvailable()) {
+      // Fallback (CI sans display server, etc.) : ne PAS stocker en clair,
+      // plutôt ne rien stocker — l'utilisateur devra se reconnecter.
+      console.warn(`[auth] safeStorage unavailable — not persisting ${key}`);
+      return;
+    }
+    const encrypted = safeStorage.encryptString(plaintext);
+    // Stocker en hex pour que store.json reste un JSON valide (Buffer non sérialisable)
+    this._store.set(key, encrypted.toString('hex'));
+  }
+
+  _loadDecrypted(key) {
+    if (!safeStorage.isEncryptionAvailable()) return null;
+    const hex = this._store.get(key);
+    if (!hex) return null;
+    try {
+      return safeStorage.decryptString(Buffer.from(hex, 'hex'));
+    } catch (e) {
+      console.warn(`[auth] Failed to decrypt ${key}:`, e.message);
+      return null;
+    }
+  }
+
+  // ── Persistance sécurisée de la session ──────────────────────────────────
+  _persistSession(msRefreshToken, mcAccessToken, expiresIn, profile) {
+    // Chiffrer les secrets
+    this._storeEncrypted(KEY_ENC_RT, msRefreshToken);
+    this._storeEncrypted(KEY_ENC_AT, mcAccessToken);
+    // Stocker les métadonnées non-sensibles en JSON
+    this._store.set(KEY_AUTH_META, {
+      expiresAt: Date.now() + (expiresIn || 86400) * 1000,
+      profile,
+    });
   }
 
   // ── Démarrer le flux d'auth ───────────────────────────────────────────────
   async startLogin() {
-    // Générer un state aléatoire anti-CSRF
     const state = crypto.randomBytes(16).toString('hex');
 
-    // Construire l'URL d'autorisation Microsoft
-    const params = new URLSearchParams({
-      client_id:     CLIENT_ID,
-      response_type: 'code',
-      redirect_uri:  REDIRECT_URI,
-      scope:         SCOPE,
-      state,
-      prompt:        'select_account',
-    });
-    const authUrl = `${MS_AUTH_BASE}/authorize?${params}`;
-
-    // Démarrer le serveur local AVANT d'ouvrir le navigateur
     const code = await Promise.race([
       this._waitForCallback(state),
       new Promise((_, reject) =>
@@ -74,7 +121,6 @@ class MicrosoftAuth {
   // ── Serveur HTTP local pour recevoir le callback ──────────────────────────
   _waitForCallback(expectedState) {
     return new Promise((resolve, reject) => {
-      // Fermer un éventuel serveur précédent
       if (this._server) {
         try { this._server.close(); } catch {}
         this._server = null;
@@ -82,53 +128,43 @@ class MicrosoftAuth {
 
       this._server = http.createServer((req, res) => {
         const url = new URL(req.url, `http://localhost:${PORT}`);
+
+        // Respond 204 to favicon/noise so the browser doesn't show a connection error
         if (url.pathname !== '/callback') {
-          res.end('Not found');
+          res.writeHead(204);
+          res.end();
           return;
         }
 
-        const code  = url.searchParams.get('code');
-        const state = url.searchParams.get('state');
-        const error = url.searchParams.get('error');
+        const code      = url.searchParams.get('code');
+        const state     = url.searchParams.get('state');
+        const error     = url.searchParams.get('error');
         const errorDesc = url.searchParams.get('error_description');
 
-        // Répondre avec une page HTML propre
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         if (error) {
           res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Erreur</title>
-<style>body{font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#020617;color:#EF4444}
-.box{text-align:center;padding:40px}</style></head>
+<style>body{font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#020617;color:#EF4444}.box{text-align:center;padding:40px}</style></head>
 <body><div class="box"><h2>❌ Erreur de connexion</h2><p>${errorDesc || error}</p>
 <p style="color:#94A3B8;margin-top:20px">Vous pouvez fermer cette fenêtre.</p></div></body></html>`);
         } else {
+          // Auto-close the tab after 2 s — user is already back in the launcher
           res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Connecté</title>
-<style>body{font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#020617;color:#22C55E}
-.box{text-align:center;padding:40px}</style></head>
+<style>body{font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#020617;color:#22C55E}.box{text-align:center;padding:40px}</style></head>
 <body><div class="box"><h2>✓ Connexion réussie !</h2>
-<p style="color:#E2E8F0">Vous pouvez fermer cette fenêtre et retourner sur le launcher.</p></div></body></html>`);
+<p style="color:#E2E8F0">Vous pouvez fermer cette fenêtre et retourner sur le launcher.</p>
+<p style="color:#64748B;font-size:12px;margin-top:12px">Cette fenêtre se fermera automatiquement...</p></div>
+<script>setTimeout(()=>window.close(),2000);</script></body></html>`);
         }
 
-        // Fermer le serveur proprement après la réponse
+        // Close server after response is flushed
         setTimeout(() => {
-          if (this._server) {
-            this._server.close();
-            this._server = null;
-          }
+          if (this._server) { this._server.close(); this._server = null; }
         }, 500);
 
-        if (error) {
-          reject(new Error(`Microsoft auth refusé : ${errorDesc || error}`));
-          return;
-        }
-        if (state !== expectedState) {
-          reject(new Error('State mismatch — possible CSRF'));
-          return;
-        }
-        if (!code) {
-          reject(new Error('Code absent dans le callback'));
-          return;
-        }
-
+        if (error)                   { reject(new Error(`Microsoft auth refusé : ${errorDesc || error}`)); return; }
+        if (state !== expectedState) { reject(new Error('State mismatch — possible CSRF')); return; }
+        if (!code)                   { reject(new Error('Code absent dans le callback')); return; }
         resolve(code);
       });
 
@@ -140,8 +176,8 @@ class MicrosoftAuth {
         }
       });
 
+      // Open the browser ONLY once the server is actually listening
       this._server.listen(PORT, '127.0.0.1', () => {
-        // Serveur prêt → ouvrir le navigateur
         const params = new URLSearchParams({
           client_id:     CLIENT_ID,
           response_type: 'code',
@@ -150,8 +186,7 @@ class MicrosoftAuth {
           state:         expectedState,
           prompt:        'select_account',
         });
-        const authUrl = `${MS_AUTH_BASE}/authorize?${params}`;
-        shell.openExternal(authUrl);
+        shell.openExternal(`${MS_AUTH_BASE}/authorize?${params}`);
       });
     });
   }
@@ -202,7 +237,7 @@ class MicrosoftAuth {
     if (!xblToken || !userHash) throw new Error('XBL : token ou userHash manquant');
 
     // 2. XSTS
-    const xstsRes = await fetch(XSTS_AUTH, {
+    const xstsRes  = await fetch(XSTS_AUTH, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({
@@ -214,9 +249,7 @@ class MicrosoftAuth {
     const xstsText = await xstsRes.text();
     let xstsData;
     try { xstsData = JSON.parse(xstsText); }
-    catch { throw new Error(`XSTS réponse invalide (${xstsRes.status}): ${xstsText.slice(0,200)}`); }
-
-    console.log('[auth] XSTS status:', xstsRes.status, 'XErr:', xstsData.XErr, 'Token:', !!xstsData.Token);
+    catch { throw new Error(`XSTS réponse invalide (${xstsRes.status}): ${xstsText.slice(0, 200)}`); }
 
     if (xstsData.XErr) {
       const XERR = {
@@ -226,23 +259,21 @@ class MicrosoftAuth {
       };
       throw new Error(XERR[xstsData.XErr] || `XSTS Error: ${xstsData.XErr}`);
     }
-    if (!xstsRes.ok) throw new Error(`XSTS échoué (${xstsRes.status}): ${xstsText.slice(0,200)}`);
-
+    if (!xstsRes.ok) throw new Error(`XSTS échoué (${xstsRes.status}): ${xstsText.slice(0, 200)}`);
     const xstsToken = xstsData.Token;
-    if (!xstsToken) throw new Error(`XSTS Token absent. Réponse complète: ${xstsText.slice(0,400)}`);
+    if (!xstsToken) throw new Error(`XSTS Token absent. Réponse: ${xstsText.slice(0, 400)}`);
 
     // 3. Minecraft
-    const mcRes = await fetch(MC_LOGIN, {
+    const mcRes  = await fetch(MC_LOGIN, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({ identityToken: `XBL3.0 x=${userHash};${xstsToken}` }),
     });
     const mcText = await mcRes.text();
-    console.log('[auth] MC login status:', mcRes.status, 'body:', mcText.slice(0,300));
-    if (!mcRes.ok) throw new Error(`Minecraft login échoué (${mcRes.status}): ${mcText.slice(0,300)}`);
+    if (!mcRes.ok) throw new Error(`Minecraft login échoué (${mcRes.status}): ${mcText.slice(0, 300)}`);
     let mcData;
     try { mcData = JSON.parse(mcText); }
-    catch { throw new Error(`MC login réponse invalide: ${mcText.slice(0,200)}`); }
+    catch { throw new Error(`MC login réponse invalide: ${mcText.slice(0, 200)}`); }
     const mcToken = mcData.access_token;
     if (!mcToken) throw new Error('Minecraft : access_token manquant');
 
@@ -260,14 +291,12 @@ class MicrosoftAuth {
     const profile = await profileRes.json();
     if (!profile.id || !profile.name) throw new Error('Profil Minecraft invalide');
 
-    const stored = {
-      msRefreshToken,
-      mcAccessToken: mcToken,
-      expiresAt:     Date.now() + (mcData.expires_in || 86400) * 1000,
-      profile: { id: profile.id, name: profile.name, skins: profile.skins || [] },
-    };
-    this._store.set('auth', stored);
-    return stored.profile;
+    // ── Persister de façon sécurisée (chiffrée) ──────────────────────────────
+    this._persistSession(msRefreshToken, mcToken, mcData.expires_in, {
+      id: profile.id, name: profile.name, skins: profile.skins || [],
+    });
+
+    return this._store.get(KEY_AUTH_META).profile;
   }
 
   // ── Refresh silencieux ────────────────────────────────────────────────────
@@ -290,23 +319,31 @@ class MicrosoftAuth {
 
   // ── Profil courant (avec auto-refresh) ───────────────────────────────────
   async getProfile() {
-    const stored = this._store.get('auth');
-    if (!stored) return null;
-    if (Date.now() > stored.expiresAt - 300_000) {
+    const meta = this._store.get(KEY_AUTH_META);
+    if (!meta?.profile) return null;
+
+    if (Date.now() > meta.expiresAt - 300_000) {
+      const rt = this._loadDecrypted(KEY_ENC_RT);
+      if (!rt) { this.logout(); return null; }
       try {
-        await this._refreshToken(stored.msRefreshToken);
-        return this._store.get('auth')?.profile ?? null;
+        await this._refreshToken(rt);
+        return this._store.get(KEY_AUTH_META)?.profile ?? null;
       } catch {
         this.logout();
         return null;
       }
     }
-    return stored.profile;
+    return meta.profile;
   }
 
-  getStoredToken() { return this._store.get('auth')?.mcAccessToken ?? null; }
-  getStoredUUID()  { return this._store.get('auth')?.profile?.id   ?? null; }
-  logout()         { this._store.delete('auth'); }
+  getStoredToken() { return this._loadDecrypted(KEY_ENC_AT); }
+  getStoredUUID()  { return this._store.get(KEY_AUTH_META)?.profile?.id ?? null; }
+
+  logout() {
+    this._store.delete(KEY_AUTH_META);
+    this._store.delete(KEY_ENC_RT);
+    this._store.delete(KEY_ENC_AT);
+  }
 }
 
 module.exports = MicrosoftAuth;

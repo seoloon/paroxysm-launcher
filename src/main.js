@@ -21,6 +21,28 @@ const auth    = new MicrosoftAuth(store);
 const library = new ModpackLibrary(store);
 store.set('__dataPath__', Store.BASE_DIR);
 
+// ── IPC security helpers ───────────────────────────────────────────────────────
+/**
+ * Returns true iff `child` is strictly inside `parent` (no '..' escape).
+ */
+function containsPath(parent, child) {
+  const rel = path.relative(path.resolve(parent), path.resolve(child));
+  return rel.length > 0 && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+/**
+ * Build the allowlist for shell:open: BASE_DIR + every known gameDir.
+ */
+function getAllowedShellRoots() {
+  const roots = [Store.BASE_DIR];
+  try {
+    for (const entry of library.list()) {
+      if (entry.gameDir) roots.push(entry.gameDir);
+    }
+  } catch {}
+  return roots.map(r => path.resolve(r));
+}
+
 /**
  * Load the cached Mojang version.json for a given MC version.
  * Used at launch time to get javaVersion.majorVersion without re-downloading.
@@ -152,7 +174,25 @@ function cleanFilename(filename) {
     .replace(/[-_]+/g, ' ')
     .trim();
 }
-ipcMain.handle('shell:open',  (_, p) => shell.openPath(p));
+// SECURITY FIX [Élevé] — shell:open : accepte uniquement les chemins dans BASE_DIR
+// ou dans un gameDir connu de la bibliothèque. Refuse toute URL.
+ipcMain.handle('shell:open', (_, p) => {
+  if (!p || typeof p !== 'string') return { error: 'Chemin invalide' };
+  // Reject URL-like strings (e.g. "https://...", "file://../../etc")
+  if (/^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(p)) {
+    console.warn('[shell:open] Rejected URL-like string:', p);
+    return { error: 'Les URLs ne sont pas autorisées via shell:open' };
+  }
+  const resolved = path.resolve(p);
+  const allowed  = getAllowedShellRoots();
+  const ok = allowed.some(root => resolved === root || containsPath(root, resolved));
+  if (!ok) {
+    console.warn('[shell:open] Rejected path outside allowed roots:', resolved);
+    return { error: 'Chemin non autorisé' };
+  }
+  if (!fs.existsSync(resolved)) return { error: 'Chemin introuvable : ' + resolved };
+  return shell.openPath(resolved);
+});
 
 // ── Resolve CurseForge mod names for existing instances ──────────────────────
 // Called from the "Contenu" tab when files still have numeric names
@@ -337,14 +377,44 @@ ipcMain.handle('modpack:get-logs', (_, packId) => {
   } catch { return []; }
 });
 
-ipcMain.handle('modpack:read-log', (_, logPath) => {
+// SECURITY FIX [Élevé] — modpack:read-log : le renderer passe { packId, logPath }.
+// On reconstruit l'allowlist côté main et on vérifie que logPath y appartient.
+ipcMain.handle('modpack:read-log', (_, payload) => {
+  // Support both old string signature (graceful degradation) and new { packId, logPath }
+  const packId  = payload?.packId  || (typeof payload === 'string' ? null : null);
+  const logPath = payload?.logPath || (typeof payload === 'string' ? payload : null);
+
+  if (!logPath) return null;
+
+  // If packId provided, do strict validation
+  if (packId) {
+    const entry = library.get(packId);
+    if (!entry?.gameDir) return null;
+    const allowedDirs = [
+      path.join(entry.gameDir, 'logs'),
+      path.join(entry.gameDir, 'crash-reports'),
+    ];
+    const resolved  = path.resolve(logPath);
+    const isAllowed = allowedDirs.some(dir => containsPath(dir, resolved));
+    if (!isAllowed) {
+      console.warn('[read-log] Rejected path outside log directories:', resolved);
+      return null;
+    }
+  } else {
+    // Fallback: path must be inside BASE_DIR
+    const resolved = path.resolve(logPath);
+    if (!containsPath(Store.BASE_DIR, resolved)) {
+      console.warn('[read-log] Rejected path outside BASE_DIR:', resolved);
+      return null;
+    }
+  }
+
   try {
-    const fs = require('fs');
     if (!fs.existsSync(logPath)) return null;
-    const size = fs.statSync(logPath).size;
+    const size     = fs.statSync(logPath).size;
     const maxBytes = 500 * 1024;
-    const buf = Buffer.alloc(Math.min(size, maxBytes));
-    const fd  = fs.openSync(logPath, 'r');
+    const buf      = Buffer.alloc(Math.min(size, maxBytes));
+    const fd       = fs.openSync(logPath, 'r');
     fs.readSync(fd, buf, 0, buf.length, Math.max(0, size - buf.length));
     fs.closeSync(fd);
     return buf.toString('utf8');
