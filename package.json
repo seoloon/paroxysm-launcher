@@ -2,13 +2,17 @@
   "name": "paroxysm-launcher",
   "version": "1.0.0-beta",
   "description": "Paroxysm Launcher — The final Minecraft launcher",
+  "author": "Seoloon",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/renderer/i18n.js && node --check src/renderer/renderer.js",
     "build:win": "electron-builder --win",
+    "build:win:release": "npm run check && electron-builder --win --publish never",
     "build:linux": "electron-builder --linux",
-    "build:mac": "electron-builder --mac"
+    "build:mac": "electron-builder --mac",
+    "build:all": "npm run check && electron-builder --win --linux --mac --publish never"
   },
   "dependencies": {
     "electron-store": "^8.1.0",
@@ -24,7 +28,7 @@
     "appId": "dev.paroxysm.launcher",
     "productName": "Paroxysm Launcher",
     "copyright": "Copyright © 2026 Seoloon",
-    "directories": { "output": "dist" },
+    "directories": { "output": "dist", "buildResources": "build" },
     "win": {
       "target": [{ "target": "nsis", "arch": ["x64"] }],
       "icon": "assets/icon.ico"

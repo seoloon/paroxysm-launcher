@@ -16,6 +16,72 @@ function formatLoaderWithVersion(loader, version){
   const name=getLoaderDisplayName(loader);
   return version?`${name} ${version}`:name;
 }
+function normalizeUuid(raw){
+  const v=String(raw||'').replace(/-/g,'').toLowerCase();
+  return /^[0-9a-f]{32}$/.test(v)?v:'';
+}
+function getAvatarUrls(profile){
+  const urls=[];
+  const uuid=normalizeUuid(profile?.id);
+  if(uuid) urls.push(`https://crafatar.com/avatars/${uuid}?size=128&overlay`);
+  const name=String(profile?.name||'').trim();
+  if(name) urls.push(`https://minotar.net/helm/${encodeURIComponent(name)}/128`);
+  return urls;
+}
+function setPlayerAvatar(el,profile){
+  if(!el)return;
+  const name=String(profile?.name||'').trim();
+  const fallback=(name[0]||'?').toUpperCase();
+  const key=`${profile?.id||''}|${name}|${Date.now()}`;
+  el.dataset.avatarKey=key;
+  el.textContent=fallback;
+  el.querySelectorAll('.player-head').forEach(n=>n.remove());
+  const urls=getAvatarUrls(profile);
+  if(!urls.length)return;
+  const img=document.createElement('img');
+  img.className='player-head';
+  img.alt='';
+  img.decoding='async';
+  let i=0;
+  const tryNext=()=>{
+    if(el.dataset.avatarKey!==key)return;
+    if(i>=urls.length)return;
+    img.src=urls[i++];
+  };
+  img.addEventListener('load',()=>{
+    if(el.dataset.avatarKey!==key)return;
+    el.textContent='';
+    if(!img.isConnected)el.appendChild(img);
+  });
+  img.addEventListener('error',tryNext);
+  tryNext();
+}
+const toastRoot=$('toast-root')||(()=>{const el=document.createElement('div');el.id='toast-root';document.body.appendChild(el);return el;})();
+function notify(message,type='info',timeout=3400){
+  if(!message)return;
+  const toast=document.createElement('div');
+  toast.className='toast toast-'+type;
+  toast.setAttribute('role','status');
+  const msg=document.createElement('div');
+  msg.className='toast-msg';
+  msg.textContent=String(message);
+  const close=document.createElement('button');
+  close.type='button';
+  close.className='toast-close';
+  close.textContent='×';
+  close.setAttribute('aria-label','Close');
+  const dismiss=()=>{
+    if(toast.classList.contains('is-closing'))return;
+    toast.classList.add('is-closing');
+    setTimeout(()=>toast.remove(),160);
+  };
+  close.addEventListener('click',dismiss);
+  toast.appendChild(msg);
+  toast.appendChild(close);
+  toastRoot.appendChild(toast);
+  setTimeout(dismiss,Math.max(1400,timeout|0));
+}
+function notifyError(error){notify(t('error.generic')+': '+(error||t('error.unknown')),'error',4800);}
 
 // Window controls
 $('btn-min').addEventListener('click',()=>px.win.minimize());
@@ -85,7 +151,7 @@ async function doImport(){
   if(isInstalling)return;const filePath=await px.modpack.pickFile();if(!filePath)return;
   isInstalling=true;openInstallModal(filePath);const result=await px.modpack.import(filePath);isInstalling=false;
   if(!result.ok){showModalError(result.error);return;}
-  $('modal-close-btn').style.display='block';await loadLibrary();
+  $('modal-close-btn').style.display='block';await loadLibrary();notify(t('install.done'),'success',2600);
 }
 $('btn-import').addEventListener('click',doImport);$('btn-import-empty').addEventListener('click',doImport);
 
@@ -112,7 +178,7 @@ function appendLog(msg){
   else if(msg.startsWith('  ')||msg.includes('['))line.style.color='var(--cyan)';
   line.textContent=msg;el.appendChild(line);if(el.children.length>400)el.removeChild(el.firstChild);el.scrollTop=el.scrollHeight;
 }
-function showModalError(msg){alert(t('modal.error_prefix')+' '+msg);$('modal-close-btn').style.display='block';}
+function showModalError(msg){notifyError(msg);$('modal-close-btn').style.display='block';}
 
 // ── Play panel ────────────────────────────────────────────────────────────────
 let ppCurrentFilter='all', ppAllFiles=[];
@@ -862,14 +928,15 @@ async function refreshAuth(){
   const cfg=await px.config.get('settings').catch(()=>null);
   const forceOffline=!!cfg?.forceOffline;
   if(profile){
-    $('acct-avatar').textContent=profile.name[0].toUpperCase();$('acct-name').textContent=profile.name;
+    setPlayerAvatar($('acct-avatar'),profile);$('acct-name').textContent=profile.name;
     $('acct-status').textContent=forceOffline?t('status.offline'):t('status.online');
     $('acct-status').className=forceOffline?'acct-status offline':'acct-status online';
     $('auth-logged-out').style.display='none';$('auth-logged-in').style.display='block';
-    $('profile-avatar').textContent=profile.name[0].toUpperCase();$('profile-name').textContent=profile.name;$('profile-uuid').textContent=profile.id;
+    setPlayerAvatar($('profile-avatar'),profile);$('profile-name').textContent=profile.name;$('profile-uuid').textContent=profile.id;
   }else{
-    $('acct-avatar').textContent='?';$('acct-name').textContent=t('auth.not_connected');
+    setPlayerAvatar($('acct-avatar'),null);$('acct-name').textContent=t('auth.not_connected');
     $('acct-status').textContent=t('status.offline');$('acct-status').className='acct-status offline';
+    setPlayerAvatar($('profile-avatar'),null);
     $('auth-logged-out').style.display='block';$('auth-logged-in').style.display='none';
   }
 }
@@ -879,7 +946,7 @@ $('btn-login').addEventListener('click',async function(){
   const result=await px.auth.login();
   this.disabled=false;this.innerHTML='<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" width="18" height="18"><path d="M3 10h14M10 4l6 6-6 6"/></svg> '+t('profile.btn.login');
   $('auth-pending-block').style.display='none';
-  if(result.ok){await refreshAuth();showPage('library');}else alert(t('error.generic')+': '+(result.error||t('error.unknown')));
+  if(result.ok){await refreshAuth();showPage('library');}else notifyError(result.error);
 });
 px.on('auth:browser-opening',()=>{$('auth-pending-label').textContent=t('auth.browser_opened');});
 px.on('auth:exchanging',()=>{$('auth-pending-label').textContent=t('auth.verifying_mc');});
@@ -1261,6 +1328,7 @@ async function handleModpackDownload(btn) {
         } else {
           $('modal-close-btn').style.display='block';
           await loadLibrary();
+          notify(t('install.done'),'success',2600);
         }
       } finally {
         isInstalling = false;
@@ -1269,7 +1337,7 @@ async function handleModpackDownload(btn) {
   } else {
     btn.disabled=false;
     btn.innerHTML='<svg viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6l3 3 3-3" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 11h10" stroke-linecap="round"/></svg> '+t('mr.retry');
-    alert(t('error.generic')+': '+(result.error||t('error.unknown')));
+    notifyError(result.error);
   }
 }
 
@@ -1324,7 +1392,7 @@ async function handleContentDownload(btn, project, versionObj, projectType) {
   const instances = await px.library.list();
 
   if (!instances.length) {
-    alert(t('inst_pick.no_instances'));
+    notify(t('inst_pick.no_instances'),'info',3600);
     return;
   }
 
@@ -1418,7 +1486,7 @@ async function handleContentDownload(btn, project, versionObj, projectType) {
       } else {
         btn.disabled = false;
         btn.innerHTML = '<svg viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6l3 3 3-3" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 11h10" stroke-linecap="round"/></svg> '+t('mr.retry');
-        alert(t('error.generic') + ': ' + (result.error || t('error.unknown')));
+        notifyError(result.error);
       }
     });
   });
@@ -1595,6 +1663,7 @@ $('ci-create').addEventListener('click', async () => {
   } else {
     $('modal-close-btn').style.display = 'block';
     await loadLibrary();
+    notify(t('install.done'),'success',2600);
   }
 });
 
