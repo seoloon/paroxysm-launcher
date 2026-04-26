@@ -1,6 +1,6 @@
 'use strict';
 /**
- * Forge & NeoForge Manager — corrected version
+ * Forge Manager — corrected version
  *
  * Key fixes vs previous:
  *  1. cwd set to MC_DIR (Forge installer uses cwd as default install target)
@@ -21,29 +21,28 @@ const MC_DIR      = path.join(Store.BASE_DIR, 'minecraft');
 const FORGE_CACHE = path.join(Store.BASE_DIR, 'cache', 'modloaders');
 
 class ForgeManager {
-  static async ensure(mcVersion, loaderVersion, javaPath, onProgress = () => {}, loader = 'forge') {
-    const versionId   = buildVersionId(loader, mcVersion, loaderVersion);
-    const versionJson = path.join(MC_DIR, 'versions', versionId, `${versionId}.json`);
-
-    if (fs.existsSync(versionJson)) {
-      onProgress(100, `${loader} ${loaderVersion} déjà installé ✓`);
-      return versionId;
+  static async ensure(mcVersion, loaderVersion, javaPath, onProgress = () => {}) {
+    const expectedVersionId = buildVersionId(mcVersion, loaderVersion);
+    const existingVersionId = resolveInstalledVersionId(mcVersion, loaderVersion);
+    if (existingVersionId) {
+      onProgress(100, `Forge ${loaderVersion} déjà installé ✓`);
+      return existingVersionId;
     }
 
     fs.mkdirSync(FORGE_CACHE, { recursive: true });
     fs.mkdirSync(MC_DIR,      { recursive: true });
 
     // ── Download installer JAR ─────────────────────────────────────────────
-    const installerUrl = buildInstallerUrl(loader, mcVersion, loaderVersion);
-    const installerJar = path.join(FORGE_CACHE, `${versionId}-installer.jar`);
+    const installerUrl = buildInstallerUrl(mcVersion, loaderVersion);
+    const installerJar = path.join(FORGE_CACHE, `${expectedVersionId}-installer.jar`);
 
     if (!fs.existsSync(installerJar) || !isValidJar(installerJar)) {
-      onProgress(5, `Téléchargement ${loaderLabel(loader)} ${loaderVersion}...`);
+      onProgress(5, `Téléchargement Forge ${loaderVersion}...`);
       // Remove potentially corrupt file
       try { fs.unlinkSync(installerJar); } catch {}
 
       await downloadFile(installerUrl, installerJar, pct => {
-        onProgress(5 + Math.round(pct * 0.35), `${loaderLabel(loader)}: ${pct}%`);
+        onProgress(5 + Math.round(pct * 0.35), `Forge: ${pct}%`);
       });
 
       if (!isValidJar(installerJar)) {
@@ -51,7 +50,7 @@ class ForgeManager {
         throw new Error(`Le fichier téléchargé n'est pas un JAR valide.\nURL: ${installerUrl}`);
       }
     } else {
-      onProgress(40, `Installer ${loaderLabel(loader)} déjà en cache`);
+      onProgress(40, `Installer Forge déjà en cache`);
     }
 
     // ── Create launcher_profiles.json (required by Forge installer) ──────────
@@ -60,7 +59,7 @@ class ForgeManager {
     ensureLauncherProfiles(MC_DIR);
 
     // ── Run installer ──────────────────────────────────────────────────────
-    onProgress(40, `Lancement de l'installer ${loaderLabel(loader)}...`);
+    onProgress(40, `Lancement de l'installer Forge...`);
     onProgress(41, `(Cette étape peut prendre 3-10 minutes, Forge télécharge les bibliothèques Minecraft)`);
 
     const fullLog = await runInstaller(javaPath, installerJar, MC_DIR, (line, pct) => {
@@ -68,47 +67,103 @@ class ForgeManager {
     });
 
     // ── Verify installation succeeded ──────────────────────────────────────
-    if (!fs.existsSync(versionJson)) {
-      // Try alternate version ID formats Forge sometimes uses
-      const alt1 = path.join(MC_DIR, 'versions', `${mcVersion}-forge${loaderVersion}`, `${mcVersion}-forge${loaderVersion}.json`);
-      const alt2 = path.join(MC_DIR, 'versions', `${mcVersion}-forge-${loaderVersion}`, `${mcVersion}-forge-${loaderVersion}.json`);
-
-      if (!fs.existsSync(alt1) && !fs.existsSync(alt2)) {
-        // Installation failed — include last 20 lines of logs in error
-        const logTail = fullLog.slice(-20).join('\n');
-        throw new Error(
-          `L'installer ${loaderLabel(loader)} a terminé mais le profil est introuvable.\n` +
-          `Chemin attendu: ${versionJson}\n\n` +
-          `Derniers logs Forge:\n${logTail}`
-        );
-      }
-      // Return the actual version ID that was created
-      if (fs.existsSync(alt1)) return path.basename(path.dirname(alt1));
-      if (fs.existsSync(alt2)) return path.basename(path.dirname(alt2));
+    const resolvedVersionId = resolveInstalledVersionId(mcVersion, loaderVersion);
+    if (!resolvedVersionId) {
+      const logTail = fullLog.slice(-25).join('\n');
+      throw new Error(
+        `L'installer Forge a terminé mais le profil est introuvable.\n` +
+        `Version attendue (candidats): ${buildCandidateVersionIds(mcVersion, loaderVersion).join(', ')}\n\n` +
+        `Derniers logs Forge:\n${logTail}`
+      );
     }
 
-    onProgress(100, `${loaderLabel(loader)} ${loaderVersion} installé ✓`);
-    return versionId;
+    onProgress(100, `Forge ${loaderVersion} installé ✓`);
+    return resolvedVersionId;
   }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-function buildVersionId(loader, mcVersion, loaderVersion) {
-  if (loader === 'neoforge') return `${mcVersion}-neoforge-${loaderVersion}`;
+function resolveInstalledVersionId(mcVersion, loaderVersion) {
+  const versionsRoot = path.join(MC_DIR, 'versions');
+  const candidates = buildCandidateVersionIds(mcVersion, loaderVersion);
+
+  for (const versionId of candidates) {
+    const jsonPath = path.join(versionsRoot, versionId, `${versionId}.json`);
+    if (fs.existsSync(jsonPath)) return versionId;
+  }
+
+  if (!fs.existsSync(versionsRoot)) return null;
+
+  const matches = fs.readdirSync(versionsRoot)
+    .filter(dir => /forge/i.test(dir) && !/neoforge/i.test(dir))
+    .map(dir => {
+      const jsonPath = path.join(versionsRoot, dir, `${dir}.json`);
+      if (!fs.existsSync(jsonPath)) return null;
+      const profile = readVersionJsonSafe(jsonPath);
+      const profileMc = inferMcVersion(profile, dir);
+      const profileLoader = inferForgeVersion(profile, dir);
+      const mcMatches = profileMc ? profileMc === mcVersion : dir.startsWith(`${mcVersion}-`);
+      const loaderMatches = profileLoader ? profileLoader === loaderVersion : dir.includes(loaderVersion);
+      if (!mcMatches || !loaderMatches) return null;
+      const stat = fs.statSync(jsonPath);
+      const exactCandidate = candidates.includes(dir);
+      return { dir, exactCandidate, mtime: stat.mtimeMs };
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      if (a.exactCandidate !== b.exactCandidate) return a.exactCandidate ? -1 : 1;
+      return b.mtime - a.mtime;
+    });
+
+  return matches[0]?.dir || null;
+}
+
+function buildCandidateVersionIds(mcVersion, loaderVersion) {
+  return [
+    `${mcVersion}-forge-${loaderVersion}`,
+    `${mcVersion}-forge${loaderVersion}`,
+  ];
+}
+
+function buildVersionId(mcVersion, loaderVersion) {
   return `${mcVersion}-forge-${loaderVersion}`;
 }
 
-function buildInstallerUrl(loader, mcVersion, loaderVersion) {
-  if (loader === 'neoforge') {
-    return `https://maven.neoforged.net/releases/net/neoforged/neoforge/${loaderVersion}/neoforge-${loaderVersion}-installer.jar`;
-  }
+function buildInstallerUrl(mcVersion, loaderVersion) {
   const full = `${mcVersion}-${loaderVersion}`;
   return `https://maven.minecraftforge.net/net/minecraftforge/forge/${full}/forge-${full}-installer.jar`;
 }
 
-function loaderLabel(loader) {
-  return loader === 'neoforge' ? 'NeoForge' : 'Forge';
+function readVersionJsonSafe(jsonPath) {
+  try {
+    return JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function inferMcVersion(profile, dirName) {
+  if (profile?.inheritsFrom) return String(profile.inheritsFrom);
+  const fromArgs = extractNamedArg(profile?.arguments?.game, '--fml.mcVersion');
+  if (fromArgs) return fromArgs;
+  const m = String(dirName).match(/^(\d+\.\d+(?:\.\d+)?)-/);
+  return m ? m[1] : '';
+}
+
+function inferForgeVersion(profile, dirName) {
+  const fromArgs = extractNamedArg(profile?.arguments?.game, '--fml.forgeVersion');
+  if (fromArgs) return fromArgs;
+  const m = String(dirName).match(/forge[-_]?([0-9][\w.+-]*)/i);
+  return m ? m[1] : '';
+}
+
+function extractNamedArg(gameArgs, argName) {
+  if (!Array.isArray(gameArgs)) return '';
+  for (let i = 0; i < gameArgs.length - 1; i++) {
+    if (gameArgs[i] === argName) return String(gameArgs[i + 1] || '');
+  }
+  return '';
 }
 
 /**
