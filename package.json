@@ -1,6 +1,6 @@
 {
   "name": "paroxysm-launcher",
-  "version": "0.3.8",
+  "version": "1.0.0-beta",
   "description": "Paroxysm Launcher — The final Minecraft launcher",
   "main": "src/main.js",
   "scripts": {
