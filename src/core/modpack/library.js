@@ -2,6 +2,12 @@
 const fs   = require('fs');
 const path = require('path');
 const Store = require('../utils/store');
+const INSTANCES_DIR = path.join(Store.BASE_DIR, 'instances');
+
+function containsPath(parent, child) {
+  const rel = path.relative(path.resolve(parent), path.resolve(child));
+  return rel.length > 0 && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
 
 class ModpackLibrary {
   constructor(store) { this._store = store; }
@@ -77,7 +83,13 @@ class ModpackLibrary {
   delete(id) {
     const all = this._all();
     if (!all[id]) return false;
-    try { fs.rmSync(all[id].gameDir, { recursive: true, force: true }); } catch {}
+    const target = path.resolve(all[id].gameDir || '');
+    const instancesRoot = path.resolve(INSTANCES_DIR);
+    if (containsPath(instancesRoot, target)) {
+      try { fs.rmSync(target, { recursive: true, force: true }); } catch {}
+    } else {
+      console.warn('[library:delete] Refused to delete path outside instances dir:', target);
+    }
     delete all[id];
     this._store.set('library', all);
     return true;
