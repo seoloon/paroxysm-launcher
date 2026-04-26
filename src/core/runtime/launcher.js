@@ -308,21 +308,13 @@ function mergeProfiles(vanilla, loader) {
 // ── Utilities ──────────────────────────────────────────────────────────────────
 function detectJavaMajorVersion(javaPath) {
   try {
-    const { execFileSync } = require('child_process');
-    const out = execFileSync(javaPath, ['-version'], { encoding: 'utf8', stderr: 'pipe' });
-    // java -version outputs to stderr, merge both
-    const all = out + '';
+    const { spawnSync } = require('child_process');
+    const r = spawnSync(javaPath, ['-version'], { encoding: 'utf8' });
+    const all = (r.stdout || '') + (r.stderr || '');
     const m = all.match(/version "(?:1\.)?([0-9]+)/);
     return m ? parseInt(m[1]) : 17;
   } catch (e) {
-    try {
-      // Fallback: try stderr
-      const { spawnSync } = require('child_process');
-      const r = spawnSync(javaPath, ['-version'], { encoding: 'utf8' });
-      const all = (r.stdout || '') + (r.stderr || '');
-      const m = all.match(/version "(?:1\.)?([0-9]+)/);
-      return m ? parseInt(m[1]) : 17;
-    } catch { return 17; }
+    return 17;
   }
 }
 
