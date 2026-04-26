@@ -44,7 +44,10 @@ contextBridge.exposeInMainWorld('px', {
   game: {
     launch: id => ipcRenderer.invoke('game:launch', id),
   },
-  shell: { open: p => ipcRenderer.invoke('shell:open', p) },
+  shell: {
+    open:         p   => ipcRenderer.invoke('shell:open', p),
+    openExternal: url => ipcRenderer.invoke('shell:open-external', url),
+  },
   modrinth: {
     search:           (params) => ipcRenderer.invoke('modrinth:search', params),
     getProject:       (id)     => ipcRenderer.invoke('modrinth:get-project', id),
@@ -54,7 +57,7 @@ contextBridge.exposeInMainWorld('px', {
   },
   modpack: {
     pickFile:     ()       => ipcRenderer.invoke('modpack:pick-file'),
-    import:       path     => ipcRenderer.invoke('modpack:import', path),
+    import:       payload  => ipcRenderer.invoke('modpack:import', payload),
     resolveNames: id       => ipcRenderer.invoke('modpack:resolve-names', id),
     fetchIcon:    (params) => ipcRenderer.invoke('modpack:fetch-icon', params),
   },
