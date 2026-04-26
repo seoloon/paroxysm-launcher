@@ -4,6 +4,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs   = require('fs');
 const os   = require('os');
+const crypto = require('crypto');
 
 const MicrosoftAuth    = require('./core/auth/microsoft');
 const ModpackParser    = require('./core/modpack/parser');
@@ -12,6 +13,7 @@ const ModpackLibrary   = require('./core/modpack/library');
 const JavaManager      = require('./core/runtime/java');
 const MinecraftManager = require('./core/runtime/minecraft');
 const ForgeManager     = require('./core/runtime/forge');
+const NeoForgeManager  = require('./core/runtime/neoforge');
 const FabricManager    = require('./core/runtime/fabric');
 const GameLauncher     = require('./core/runtime/launcher');
 const Store            = require('./core/utils/store');
@@ -28,6 +30,57 @@ store.set('__dataPath__', Store.BASE_DIR);
 function containsPath(parent, child) {
   const rel = path.relative(path.resolve(parent), path.resolve(child));
   return rel.length > 0 && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+function hashFile(filePath, algorithm) {
+  const hash = crypto.createHash(algorithm);
+  hash.update(fs.readFileSync(filePath));
+  return hash.digest('hex');
+}
+
+function sanitizeSettings(input, current = {}) {
+  const src = (input && typeof input === 'object') ? input : {};
+  const cur = (current && typeof current === 'object') ? current : {};
+  const out = {};
+
+  if (Number.isFinite(+cur.ram)) out.ram = Math.max(1, Math.min(32, Math.round(+cur.ram)));
+  if (typeof cur.username === 'string') out.username = cur.username.trim().slice(0, 16);
+  if (typeof cur.forceOffline === 'boolean') out.forceOffline = cur.forceOffline;
+  if (typeof cur.cfApiKey === 'string') out.cfApiKey = cur.cfApiKey.trim().slice(0, 256);
+  if (typeof cur.language === 'string' && ['fr', 'en'].includes(cur.language)) out.language = cur.language;
+
+  if (Number.isFinite(+src.ram)) out.ram = Math.max(1, Math.min(32, Math.round(+src.ram)));
+  if (typeof src.username === 'string') out.username = src.username.trim().slice(0, 16);
+  if (typeof src.forceOffline === 'boolean') out.forceOffline = src.forceOffline;
+  if (typeof src.cfApiKey === 'string') out.cfApiKey = src.cfApiKey.trim().slice(0, 256);
+  if (typeof src.language === 'string' && ['fr', 'en'].includes(src.language)) out.language = src.language;
+
+  return out;
+}
+
+function sanitizeFilename(filename, fallback = 'download.bin') {
+  const raw = String(filename || '').trim();
+  const base = path.basename(raw || fallback);
+  const cleaned = base
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+    .replace(/[. ]+$/g, '');
+  const safe = cleaned || fallback;
+  const reserved = new Set([
+    'CON', 'PRN', 'AUX', 'NUL',
+    'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+    'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9',
+  ]);
+  const stem = safe.split('.')[0].toUpperCase();
+  return reserved.has(stem) ? `_${safe}` : safe;
+}
+
+function isAllowedExternalUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    return url.protocol === 'https:' && url.hostname === 'console.curseforge.com';
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -62,11 +115,13 @@ const isDev = process.argv.includes('--dev');
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200, height: 720,
+    // width: 1920, height: 1080,
     minWidth: 900, minHeight: 600,
     frame: false, resizable: true,
     webPreferences: {
       nodeIntegration: false, contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
+     // zoomFactor: 1.5
     },
     backgroundColor: '#020617',
     icon: path.join(__dirname, '..', 'assets', 'icon.png'),
@@ -89,7 +144,16 @@ ipcMain.on('win:maximize', () => mainWindow?.isMaximized() ? mainWindow.unmaximi
 ipcMain.on('win:close',    () => mainWindow?.close());
 
 // config:get handled below (with instance file scanning support)
-ipcMain.handle('config:set', (_, key, value) => { store.set(key, value); return true; });
+ipcMain.handle('config:set', (_, key, value) => {
+  // SECURITY: renderer can only update "settings", with field-level sanitization.
+  if (key !== 'settings') {
+    console.warn('[config:set] Rejected key:', key);
+    return false;
+  }
+  const safe = sanitizeSettings(value, store.get('settings'));
+  store.set('settings', safe);
+  return true;
+});
 ipcMain.handle('app:version', () => app.getVersion());
 
 // ── System info ───────────────────────────────────────────────────────────────
@@ -192,6 +256,12 @@ ipcMain.handle('shell:open', (_, p) => {
   }
   if (!fs.existsSync(resolved)) return { error: 'Chemin introuvable : ' + resolved };
   return shell.openPath(resolved);
+});
+
+ipcMain.handle('shell:open-external', (_, rawUrl) => {
+  if (!rawUrl || typeof rawUrl !== 'string') return { error: 'URL invalide' };
+  if (!isAllowedExternalUrl(rawUrl)) return { error: 'URL non autorisee' };
+  return shell.openExternal(rawUrl);
 });
 
 // ── Resolve CurseForge mod names for existing instances ──────────────────────
@@ -313,10 +383,34 @@ ipcMain.handle('modrinth:download', async (_, { projectId, versionId, fileName, 
     const { downloadFile } = require('./core/utils/download');
     const path = require('path');
     const fs   = require('fs');
-    fs.mkdirSync(destDir, { recursive: true });
-    const dest = path.join(destDir, file.filename);
+    const instancesRoot   = path.resolve(path.join(Store.BASE_DIR, 'instances'));
+    const downloadsRoot   = path.resolve(path.join(Store.BASE_DIR, 'downloads'));
+    const resolvedDestDir = path.resolve(destDir || '');
+    const allowedRoots    = [instancesRoot, downloadsRoot];
+    const allowedDest     = allowedRoots.some(root => resolvedDestDir === root || containsPath(root, resolvedDestDir));
+    if (!allowedDest) throw new Error('Destination non autorisée');
+
+    fs.mkdirSync(resolvedDestDir, { recursive: true });
+    const safeFilename = sanitizeFilename(file.filename || fileName || 'modrinth-file.jar', 'modrinth-file.jar');
+    const dest = path.join(resolvedDestDir, safeFilename);
     await downloadFile(file.url, dest, () => {});
-    return { ok: true, path: dest, filename: file.filename };
+
+    if (file.hashes?.sha512) {
+      const expected = String(file.hashes.sha512).toLowerCase();
+      const actual   = hashFile(dest, 'sha512');
+      if (actual !== expected) {
+        try { fs.unlinkSync(dest); } catch {}
+        throw new Error('Echec verification SHA-512');
+      }
+    } else if (file.hashes?.sha1) {
+      const expected = String(file.hashes.sha1).toLowerCase();
+      const actual   = hashFile(dest, 'sha1');
+      if (actual !== expected) {
+        try { fs.unlinkSync(dest); } catch {}
+        throw new Error('Echec verification SHA-1');
+      }
+    }
+    return { ok: true, path: dest, filename: safeFilename };
   } catch(e) { return { ok: false, error: e.message }; }
 });
 
@@ -380,41 +474,33 @@ ipcMain.handle('modpack:get-logs', (_, packId) => {
 // SECURITY FIX [Élevé] — modpack:read-log : le renderer passe { packId, logPath }.
 // On reconstruit l'allowlist côté main et on vérifie que logPath y appartient.
 ipcMain.handle('modpack:read-log', (_, payload) => {
-  // Support both old string signature (graceful degradation) and new { packId, logPath }
-  const packId  = payload?.packId  || (typeof payload === 'string' ? null : null);
-  const logPath = payload?.logPath || (typeof payload === 'string' ? payload : null);
+  const packId  = payload?.packId;
+  const logPath = payload?.logPath;
+  if (typeof packId !== 'string' || typeof logPath !== 'string' || !logPath) return null;
 
-  if (!logPath) return null;
+  const entry = library.get(packId);
+  if (!entry?.gameDir) return null;
 
-  // If packId provided, do strict validation
-  if (packId) {
-    const entry = library.get(packId);
-    if (!entry?.gameDir) return null;
-    const allowedDirs = [
-      path.join(entry.gameDir, 'logs'),
-      path.join(entry.gameDir, 'crash-reports'),
-    ];
-    const resolved  = path.resolve(logPath);
-    const isAllowed = allowedDirs.some(dir => containsPath(dir, resolved));
-    if (!isAllowed) {
-      console.warn('[read-log] Rejected path outside log directories:', resolved);
-      return null;
-    }
-  } else {
-    // Fallback: path must be inside BASE_DIR
-    const resolved = path.resolve(logPath);
-    if (!containsPath(Store.BASE_DIR, resolved)) {
-      console.warn('[read-log] Rejected path outside BASE_DIR:', resolved);
-      return null;
-    }
+  const allowedDirs = [
+    path.join(entry.gameDir, 'logs'),
+    path.join(entry.gameDir, 'crash-reports'),
+  ];
+  const resolved = path.resolve(logPath);
+  const isAllowed = allowedDirs.some(dir => containsPath(dir, resolved));
+  if (!isAllowed) {
+    console.warn('[read-log] Rejected path outside log directories:', resolved);
+    return null;
   }
+  if (!/\.(log|txt)$/i.test(resolved)) return null;
 
   try {
-    if (!fs.existsSync(logPath)) return null;
-    const size     = fs.statSync(logPath).size;
+    if (!fs.existsSync(resolved)) return null;
+    const st = fs.statSync(resolved);
+    if (!st.isFile()) return null;
+    const size = st.size;
     const maxBytes = 500 * 1024;
-    const buf      = Buffer.alloc(Math.min(size, maxBytes));
-    const fd       = fs.openSync(logPath, 'r');
+    const buf = Buffer.alloc(Math.min(size, maxBytes));
+    const fd = fs.openSync(resolved, 'r');
     fs.readSync(fd, buf, 0, buf.length, Math.max(0, size - buf.length));
     fs.closeSync(fd);
     return buf.toString('utf8');
@@ -436,9 +522,12 @@ ipcMain.handle('modpack:pick-file', async () => {
 });
 
 ipcMain.handle('modpack:import', async (_, filePath) => {
+  const payload = (filePath && typeof filePath === 'object') ? filePath : { filePath };
+  const sourcePath = String(payload.filePath || '');
+  const cleanupSource = !!payload.cleanupSource;
   try {
     // 1. Parse
-    const parsed = await ModpackParser.parse(filePath, msg => send('install:log', msg));
+    const parsed = await ModpackParser.parse(sourcePath, msg => send('install:log', msg));
     send('install:log', `✓ ${parsed.name} v${parsed.version} [${parsed.format.toUpperCase()}]`);
     send('install:log', `  MC ${parsed.mcVersion} — ${parsed.modloader} ${parsed.modloaderVersion} — ${parsed.files.length} fichiers`);
 
@@ -459,7 +548,12 @@ ipcMain.handle('modpack:import', async (_, filePath) => {
     send('install:progress', { step: 'java', pct: 100, detail: 'Java prêt' });
 
     // 4. Modloader
-    const loaderLabel = parsed.modloader.charAt(0).toUpperCase() + parsed.modloader.slice(1);
+    const loaderLabel =
+      parsed.modloader === 'neoforge' ? 'NeoForge' :
+      parsed.modloader === 'fabric' ? 'Fabric' :
+      parsed.modloader === 'quilt' ? 'Quilt' :
+      parsed.modloader === 'forge' ? 'Forge' :
+      parsed.modloader;
     send('install:progress', { step: 'modloader', pct: 40, detail: `Installation ${loaderLabel}...` });
     let versionId;
     const loaderProgress = (pct, detail) => {
@@ -468,9 +562,13 @@ ipcMain.handle('modpack:import', async (_, filePath) => {
       if (detail) send('install:log', detail);
     };
     if (parsed.modloader === 'fabric' || parsed.modloader === 'quilt') {
-      versionId = await FabricManager.ensure(parsed.mcVersion, parsed.modloaderVersion, javaPath, loaderProgress);
+      versionId = await FabricManager.ensure(parsed.mcVersion, parsed.modloaderVersion, javaPath, loaderProgress, parsed.modloader);
+    } else if (parsed.modloader === 'neoforge') {
+      versionId = await NeoForgeManager.ensure(parsed.mcVersion, parsed.modloaderVersion, javaPath, loaderProgress);
+    } else if (parsed.modloader === 'forge') {
+      versionId = await ForgeManager.ensure(parsed.mcVersion, parsed.modloaderVersion, javaPath, loaderProgress);
     } else {
-      versionId = await ForgeManager.ensure(parsed.mcVersion, parsed.modloaderVersion, javaPath, loaderProgress, parsed.modloader);
+      throw new Error(`Modloader non supporté pour ce modpack: ${parsed.modloader}`);
     }
     send('install:log', `✓ ${loaderLabel} installé → ${versionId}`);
     send('install:progress', { step: 'modloader', pct: 100, detail: `${loaderLabel} prêt` });
@@ -499,6 +597,22 @@ ipcMain.handle('modpack:import', async (_, filePath) => {
     send('install:progress', { step: 'done', pct: 100, detail: 'Installation terminée !' });
     send('install:done', entry);
     send('install:log', `✅ ${parsed.name} est prêt !`);
+    if (cleanupSource) {
+      try {
+        const resolvedSource = path.resolve(sourcePath);
+        const downloadsRoot = path.resolve(path.join(Store.BASE_DIR, 'downloads'));
+        const ext = path.extname(resolvedSource).toLowerCase();
+        const isInsideDownloads = resolvedSource !== downloadsRoot
+          && (containsPath(downloadsRoot, resolvedSource) || resolvedSource.startsWith(downloadsRoot + path.sep));
+        const shouldDelete = isInsideDownloads && ['.mrpack', '.zip'].includes(ext);
+        if (shouldDelete && fs.existsSync(resolvedSource)) {
+          fs.unlinkSync(resolvedSource);
+          send('install:log', `Archive supprimee: ${path.basename(resolvedSource)}`);
+        }
+      } catch (cleanupErr) {
+        send('install:log', `Nettoyage archive impossible: ${cleanupErr.message}`);
+      }
+    }
     return { ok: true, entry, failedMods: failed };
 
   } catch (e) {
@@ -566,14 +680,18 @@ ipcMain.handle('instance:get-mc-versions', async () => {
 
 ipcMain.handle('instance:get-loader-versions', async (_, { loader, mcVersion }) => {
   try {
+    if (loader === 'vanilla') return ['vanilla'];
     const { fetchJSON } = require('./core/utils/download');
     if (loader === 'fabric') {
       const data = await fetchJSON(`https://meta.fabricmc.net/v2/versions/loader/${mcVersion}`);
       return (data || []).map(v => v.loader.version);
     }
+    if (loader === 'quilt') {
+      const data = await fetchJSON(`https://meta.quiltmc.org/v3/versions/loader/${mcVersion}`);
+      return (data || []).map(v => v.loader?.version).filter(Boolean);
+    }
     if (loader === 'neoforge') {
-      const xml = await fetchXML('https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml');
-      return parseXMLVersions(xml).reverse();
+      return await NeoForgeManager.getVersionsForMc(mcVersion);
     }
     if (loader === 'forge') {
       const xml = await fetchXML('https://files.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml');
@@ -605,6 +723,11 @@ function parseXMLVersions(xml) {
 
 ipcMain.handle('instance:create', async (_, { name, mcVersion, loader, loaderVersion }) => {
   try {
+    const allowedLoaders = new Set(['fabric', 'forge', 'neoforge', 'quilt', 'vanilla']);
+    if (!name || !mcVersion) throw new Error('Nom et version Minecraft requis');
+    if (!allowedLoaders.has(loader)) throw new Error('Modloader invalide');
+    if (loader !== 'vanilla' && !loaderVersion) throw new Error('Version du modloader requise');
+
     send('install:log', `Création de l'instance "${name}"...`);
 
     // Vanilla first — need the profile for correct Java version detection
@@ -621,17 +744,31 @@ ipcMain.handle('instance:create', async (_, { name, mcVersion, loader, loaderVer
     send('install:log', `✓ Java: ${javaPath}`);
     send('install:progress', { step: 'java', pct: 100, detail: 'Java prêt' });
 
-    const loaderLabel = loader.charAt(0).toUpperCase() + loader.slice(1);
-    send('install:progress', { step: 'modloader', pct: 40, detail: `Installation ${loaderLabel}...` });
+    const loaderLabel =
+      loader === 'vanilla' ? 'Vanilla' :
+      loader === 'neoforge' ? 'NeoForge' :
+      loader === 'fabric' ? 'Fabric' :
+      loader === 'quilt' ? 'Quilt' :
+      loader === 'forge' ? 'Forge' :
+      loader;
     let versionId;
-    const loaderProgress = (pct, detail) => {
-      send('install:progress', { step: 'modloader', pct: 40 + Math.round(pct * 0.6), detail });
-      if (detail) send('install:log', detail);
-    };
-    if (loader === 'fabric' || loader === 'quilt') {
-      versionId = await FabricManager.ensure(mcVersion, loaderVersion, javaPath, loaderProgress);
+    if (loader === 'vanilla') {
+      versionId = mcVersion;
+      send('install:progress', { step: 'modloader', pct: 100, detail: 'Vanilla prêt' });
+      send('install:log', `✓ Minecraft Vanilla ${mcVersion} prêt`);
     } else {
-      versionId = await ForgeManager.ensure(mcVersion, loaderVersion, javaPath, loaderProgress, loader);
+      send('install:progress', { step: 'modloader', pct: 40, detail: `Installation ${loaderLabel}...` });
+      const loaderProgress = (pct, detail) => {
+        send('install:progress', { step: 'modloader', pct: 40 + Math.round(pct * 0.6), detail });
+        if (detail) send('install:log', detail);
+      };
+      if (loader === 'fabric' || loader === 'quilt') {
+        versionId = await FabricManager.ensure(mcVersion, loaderVersion, javaPath, loaderProgress, loader);
+      } else if (loader === 'neoforge') {
+        versionId = await NeoForgeManager.ensure(mcVersion, loaderVersion, javaPath, loaderProgress);
+      } else {
+        versionId = await ForgeManager.ensure(mcVersion, loaderVersion, javaPath, loaderProgress);
+      }
     }
 
     send('install:progress', { step: 'mods', pct: 100, detail: 'Instance vide (aucun mod)' });
@@ -643,7 +780,7 @@ ipcMain.handle('instance:create', async (_, { name, mcVersion, loader, loaderVer
 
     const parsed = {
       name, version: '1.0', author: '', mcVersion,
-      modloader: loader, modloaderVersion: loaderVersion,
+      modloader: loader, modloaderVersion: loader === 'vanilla' ? '' : loaderVersion,
       format: 'custom', files: [], iconData: null, tmpDir: null,
     };
     const entry = library.add(parsed, [], versionId);
