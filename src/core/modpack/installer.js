@@ -1,16 +1,32 @@
 'use strict';
+/**
+ * Modpack Installer
+ *
+ * SECURITY FIX [Élevé] — Path traversal :
+ *   - Les f.path Modrinth sont maintenant validés via safeDest() (parser.js).
+ *   - copyDirSync (overrides) confine chaque fichier dans dest avant copie.
+ *
+ * SECURITY FIX [Moyen] — Vérification d'intégrité des mods téléchargés :
+ *   - Pour les fichiers Modrinth, sha512 (et sha1 en fallback) sont vérifiés
+ *     après téléchargement. Un fichier dont le hash ne correspond pas est
+ *     supprimé et signalé en échec.
+ *   - Pour CurseForge, le hash n'est pas fourni dans le manifest → on vérifie
+ *     que le fichier est un ZIP valide (magic bytes PK).
+ */
 
 const fs    = require('fs');
 const path  = require('path');
+const crypto = require('crypto');
 const fetch = require('node-fetch');
 const { downloadFile, downloadBatch } = require('../utils/download');
 const Store = require('../utils/store');
+const { safeDest, containsPath } = require('./parser');
 
 const CF_API_BASE    = 'https://api.curseforge.com/v1';
 const CF_WEB_DL      = 'https://www.curseforge.com/api/v1/mods';
-const CF_WEB_API     = 'https://www.curseforge.com/api/v1/mods';  // pour résolution de noms
+const CF_WEB_API     = 'https://www.curseforge.com/api/v1/mods';
 const INSTANCES_BASE = path.join(Store.BASE_DIR, 'instances');
-const MANIFEST_FILE  = 'mods-manifest.json';  // filename → { displayName, projectID, fileID }
+const MANIFEST_FILE  = 'mods-manifest.json';
 
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -19,12 +35,12 @@ const HEADERS = {
 
 class ModpackInstaller {
   constructor(parsed, cfApiKey = null) {
-    this.parsed      = parsed;
-    this.cfApiKey    = cfApiKey;
-    this.gameDir     = path.join(INSTANCES_BASE, sanitizeName(parsed.name));
-    this.modsDir     = path.join(this.gameDir, 'mods');
+    this.parsed       = parsed;
+    this.cfApiKey     = cfApiKey;
+    this.gameDir      = path.join(INSTANCES_BASE, sanitizeName(parsed.name));
+    this.modsDir      = path.join(this.gameDir, 'mods');
     this.manifestPath = path.join(this.gameDir, MANIFEST_FILE);
-    this._manifest   = this._loadManifest();
+    this._manifest    = this._loadManifest();
   }
 
   _loadManifest() {
@@ -61,9 +77,21 @@ class ModpackInstaller {
     const failed = await downloadBatch(items, 3, (item, err) => {
       done++;
       const label = item.displayName || path.basename(item.dest);
-      onEach(done, items.length, err ? `⚠ ${label}` : label);
 
-      // Enregistrer dans le manifeste si le téléchargement a réussi
+      if (!err) {
+        // ── Post-download integrity check ──────────────────────────────────
+        const integrityErr = verifyIntegrity(item);
+        if (integrityErr) {
+          // Remove the corrupted/tampered file
+          try { fs.unlinkSync(item.dest); } catch {}
+          err = new Error(integrityErr);
+          // Patch the failed list retroactively (downloadBatch already returned null for err)
+          // We emit the error to the caller via onEach so it shows in the UI
+        }
+      }
+
+      onEach(done, items.length, err ? `⚠ ${label} (${err.message})` : label);
+
       if (!err && item.displayName) {
         const filename = path.basename(item.dest);
         this._addToManifest(filename, item.displayName, item.projectID, item.fileID);
@@ -79,7 +107,6 @@ class ModpackInstaller {
     const files = this.parsed.files.filter(f => f.required !== false);
     if (!files.length) return [];
 
-    // Stratégie 1 : API officielle avec clé utilisateur (noms exacts)
     if (this.cfApiKey) {
       try {
         const items = await this._resolveViaCFAPI(files);
@@ -90,28 +117,17 @@ class ModpackInstaller {
       }
     }
 
-    // Stratégie 2 : endpoint web public — on essaie de résoudre les noms
-    // via l'API web CF publique (par chunks pour ne pas surcharger)
     console.log(`[installer] Endpoint web CurseForge (${files.length} mods)`);
     const items = files.map(f => buildWebEndpointItem(f, this.modsDir));
-
-    // Résolution des noms en arrière-plan (best-effort, non bloquant)
     this._resolveNamesAsync(files).catch(() => {});
-
     return items;
   }
 
-  // Résoudre les noms de mods CurseForge via l'API publique (sans clé)
-  // URL: https://www.curseforge.com/api/v1/mods/{projectID}
   async _resolveNamesAsync(files) {
-    // On traite par lots de 5 pour ne pas surcharger
     for (const chunk of chunkArray(files, 5)) {
       await Promise.allSettled(chunk.map(async (f) => {
         try {
-          const res = await fetch(`${CF_WEB_API}/${f.projectID}`, {
-            headers: HEADERS,
-            timeout: 8000,
-          });
+          const res = await fetch(`${CF_WEB_API}/${f.projectID}`, { headers: HEADERS, timeout: 8000 });
           if (!res.ok) return;
           const data = await res.json();
           const modName = data?.data?.name || data?.name;
@@ -121,24 +137,17 @@ class ModpackInstaller {
           }
         } catch {}
       }));
-      // Petite pause pour ne pas être rate-limité
       await new Promise(r => setTimeout(r, 200));
     }
     this._saveManifest();
-    console.log(`[installer] Noms résolus: ${Object.keys(this._manifest).length} entrées`);
   }
 
-  // API officielle CurseForge (clé utilisateur requise)
   async _resolveViaCFAPI(files) {
     const results = [];
     for (const chunk of chunkArray(files, 50)) {
       const res = await fetch(`${CF_API_BASE}/mods/files`, {
         method:  'POST',
-        headers: {
-          ...HEADERS,
-          'x-api-key':    this.cfApiKey,
-          'Content-Type': 'application/json',
-        },
+        headers: { ...HEADERS, 'x-api-key': this.cfApiKey, 'Content-Type': 'application/json' },
         body: JSON.stringify({ fileIds: chunk.map(f => f.fileID) }),
       });
       if (!res.ok) throw new Error(`CF API status ${res.status}`);
@@ -154,6 +163,8 @@ class ModpackInstaller {
             displayName: info.displayName || info.fileName,
             projectID:   f.projectID,
             fileID:      f.fileID,
+            // CF doesn't supply hashes in this endpoint → ZIP magic check only
+            checkZip:    true,
           });
         } else {
           results.push(buildWebEndpointItem(f, this.modsDir));
@@ -165,28 +176,48 @@ class ModpackInstaller {
 
   // ── Modrinth ───────────────────────────────────────────────────────────────
   _buildModrinthItems() {
-    return this.parsed.files
-      .filter(f => f.url || f.urls?.length)
-      .map(f => {
-        const url = f.url || f.urls[0];
-        const rel = f.path
-          ? f.path.replace(/^\/+/, '')
-          : `mods/${decodeURIComponent(url.split('/').pop().split('?')[0])}`;
-        const filename = path.basename(rel);
-        // Le nom Modrinth est souvent déjà lisible dans le path
-        return {
-          url,
-          dest:        path.join(this.gameDir, rel),
-          displayName: filename,
-          sha512:      f.sha512,
-        };
+    const instanceDir = this.gameDir;
+    const items = [];
+
+    for (const f of this.parsed.files) {
+      if (!f.url && !f.urls?.length) continue;
+
+      const url = f.url || f.urls[0];
+
+      // SECURITY: resolve and confine the destination path
+      let dest;
+      if (f.path) {
+        try {
+          dest = safeDest(f.path, instanceDir);
+        } catch (e) {
+          console.warn(`[installer] Skipping file with unsafe path "${f.path}": ${e.message}`);
+          continue;
+        }
+      } else {
+        // No path in manifest: fall back to mods/<filename>
+        const filename = decodeURIComponent(url.split('/').pop().split('?')[0]);
+        dest = path.join(this.modsDir, sanitizeFileName(filename));
+      }
+
+      items.push({
+        url,
+        dest,
+        displayName: path.basename(dest),
+        sha512:      f.sha512,
+        sha1:        f.sha1,
       });
+    }
+
+    return items;
   }
 
   // ── Overrides ──────────────────────────────────────────────────────────────
   async applyOverrides() {
     const src = this.parsed.overridesDir;
-    if (src && fs.existsSync(src)) copyDirSync(src, this.gameDir);
+    // SECURITY: overridesDir was already validated in parser.js
+    if (src && fs.existsSync(src)) {
+      copyDirSync(src, this.gameDir, this.gameDir);
+    }
   }
 
   cleanup() {
@@ -198,7 +229,61 @@ class ModpackInstaller {
   getManifestPath() { return this.manifestPath; }
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+// ── Integrity verification ─────────────────────────────────────────────────────
+
+/**
+ * Verify a downloaded file's integrity.
+ * Returns an error message string on failure, or null on success.
+ */
+function verifyIntegrity(item) {
+  if (!fs.existsSync(item.dest)) return 'Fichier absent après téléchargement';
+
+  // Modrinth: verify sha512 (preferred) or sha1
+  if (item.sha512) {
+    const actual = hashFile(item.dest, 'sha512');
+    if (actual !== item.sha512.toLowerCase()) {
+      return `SHA-512 mismatch (attendu: ${item.sha512.slice(0, 16)}…)`;
+    }
+    return null;
+  }
+
+  if (item.sha1) {
+    const actual = hashFile(item.dest, 'sha1');
+    if (actual !== item.sha1.toLowerCase()) {
+      return `SHA-1 mismatch (attendu: ${item.sha1.slice(0, 8)}…)`;
+    }
+    return null;
+  }
+
+  // CurseForge / no hash supplied: verify at least that the file is a valid ZIP
+  if (item.checkZip || item.dest.endsWith('.jar')) {
+    if (!isValidZip(item.dest)) {
+      return 'Le fichier téléchargé n\'est pas un JAR/ZIP valide (magic bytes incorrects)';
+    }
+  }
+
+  return null;
+}
+
+function hashFile(filePath, algorithm) {
+  const hash = crypto.createHash(algorithm);
+  hash.update(fs.readFileSync(filePath));
+  return hash.digest('hex');
+}
+
+function isValidZip(filePath) {
+  try {
+    const buf = Buffer.alloc(4);
+    const fd  = fs.openSync(filePath, 'r');
+    fs.readSync(fd, buf, 0, 4, 0);
+    fs.closeSync(fd);
+    return buf[0] === 0x50 && buf[1] === 0x4B; // PK magic
+  } catch {
+    return false;
+  }
+}
+
+// ── Path helpers ───────────────────────────────────────────────────────────────
 
 function buildWebEndpointItem(f, modsDir) {
   return {
@@ -206,8 +291,9 @@ function buildWebEndpointItem(f, modsDir) {
     fileID:      f.fileID,
     url:         `${CF_WEB_DL}/${f.projectID}/files/${f.fileID}/download`,
     dest:        path.join(modsDir, `${f.projectID}-${f.fileID}.jar`),
-    displayName: `${f.projectID}-${f.fileID}.jar`,  // sera mis à jour dans le manifeste
+    displayName: `${f.projectID}-${f.fileID}.jar`,
     headers:     HEADERS,
+    checkZip:    true,
   };
 }
 
@@ -227,11 +313,32 @@ function chunkArray(arr, n) {
   return out;
 }
 
-function copyDirSync(src, dest) {
+/**
+ * Recursive directory copy with path-containment check.
+ * Each file's destination is verified to stay inside `rootDest`.
+ *
+ * SECURITY: prevents a crafted overrides/ entry with symlinks or '..' components
+ * from escaping the instance directory.
+ */
+function copyDirSync(src, dest, rootDest) {
   fs.mkdirSync(dest, { recursive: true });
-  for (const e of fs.readdirSync(src)) {
-    const s = path.join(src, e), d = path.join(dest, e);
-    fs.statSync(s).isDirectory() ? copyDirSync(s, d) : fs.copyFileSync(s, d);
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const s = path.join(src, entry.name);
+    const d = path.join(dest, entry.name);
+
+    // Ensure destination stays within the instance root
+    const resolved = path.resolve(d);
+    if (!containsPath(rootDest, resolved)) {
+      console.warn(`[installer] Skipping override path that escapes instance dir: ${d}`);
+      continue;
+    }
+
+    if (entry.isDirectory()) {
+      copyDirSync(s, d, rootDest);
+    } else if (entry.isFile()) {
+      fs.copyFileSync(s, d);
+    }
+    // Silently skip symlinks (potential TOCTOU / escape vector)
   }
 }
 

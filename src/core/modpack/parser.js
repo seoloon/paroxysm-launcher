@@ -2,58 +2,31 @@
 /**
  * Modpack Parser
  *
- * Supports:
- *  - CurseForge  .zip  → manifest.json
- *  - Modrinth    .mrpack → modrinth.index.json  (which is also a .zip)
- *
- * Returns a unified ParsedModpack object:
- * {
- *   format:            'curseforge' | 'modrinth'
- *   name:              string
- *   version:           string
- *   mcVersion:         string         // e.g. "1.20.1"
- *   modloader:         'forge' | 'neoforge' | 'fabric' | 'quilt'
- *   modloaderVersion:  string
- *   files:             ModFile[]
- *   overridesDir:      string         // extracted tmp path
- *   tmpDir:            string
- * }
- *
- * ModFile (CurseForge):  { type: 'curseforge', projectID, fileID, required }
- * ModFile (Modrinth):    { type: 'modrinth',   url, sha512, path, size }
+ * SECURITY FIX [Élevé] — Path traversal :
+ *   - manifest.overrides est désormais validé avec containsPath() avant usage.
+ *   - Les paths Modrinth (f.path) sont normalisés et confinés à l'instance dir.
+ *   - extractIcon() retourne null si le chemin résolu sort du tmpDir.
  */
 
 const fs      = require('fs');
 const path    = require('path');
 const os      = require('os');
 const extract = require('extract-zip');
-const crypto  = require('crypto');
 
 class ModpackParser {
-  /**
-   * @param {string} filePath  - path to .zip or .mrpack
-   * @param {function} log
-   * @returns {Promise<ParsedModpack>}
-   */
   static async parse(filePath, log = () => {}) {
     log(`Lecture de l'archive: ${path.basename(filePath)}`);
 
-    const ext    = path.extname(filePath).toLowerCase();
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'paroxysm-'));
 
     await extract(filePath, { dir: tmpDir });
     log('Archive extraite');
 
-    // Detect format
-    const cfManifest  = path.join(tmpDir, 'manifest.json');
-    const mrManifest  = path.join(tmpDir, 'modrinth.index.json');
+    const cfManifest = path.join(tmpDir, 'manifest.json');
+    const mrManifest = path.join(tmpDir, 'modrinth.index.json');
 
-    if (fs.existsSync(cfManifest)) {
-      return ModpackParser._parseCurseForge(tmpDir, cfManifest, log);
-    }
-    if (fs.existsSync(mrManifest)) {
-      return ModpackParser._parseModrinth(tmpDir, mrManifest, log);
-    }
+    if (fs.existsSync(cfManifest)) return ModpackParser._parseCurseForge(tmpDir, cfManifest, log);
+    if (fs.existsSync(mrManifest)) return ModpackParser._parseModrinth(tmpDir, mrManifest, log);
 
     throw new Error(
       'Format inconnu: ni manifest.json (CurseForge) ni modrinth.index.json (Modrinth) trouvé.'
@@ -64,19 +37,26 @@ class ModpackParser {
   static _parseCurseForge(tmpDir, manifestPath, log) {
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 
-    const mcInfo    = manifest.minecraft || {};
-    const loaders   = mcInfo.modLoaders || [];
-    const primary   = loaders.find(l => l.primary) || loaders[0];
-
+    const mcInfo  = manifest.minecraft || {};
+    const loaders = mcInfo.modLoaders || [];
+    const primary = loaders.find(l => l.primary) || loaders[0];
     if (!primary) throw new Error('Aucun modloader trouvé dans manifest.json');
 
     const { loader, version: mlVersion } = parseLoaderString(primary.id);
 
     log(`CurseForge: ${manifest.name} v${manifest.version}`);
-    log(`  MC ${mcInfo.version} — ${loader} ${mlVersion}`);
-    log(`  ${manifest.files?.length ?? 0} mods`);
+    log(`  MC ${mcInfo.version} — ${loader} ${mlVersion} — ${manifest.files?.length ?? 0} mods`);
 
-    // Try to extract icon image from common locations in the zip
+    // SECURITY: validate the overrides directory name — must stay inside tmpDir
+    const rawOverrides    = manifest.overrides || 'overrides';
+    const resolvedOverrides = path.resolve(tmpDir, rawOverrides);
+    if (!containsPath(tmpDir, resolvedOverrides)) {
+      log(`⚠ overrides path traversal détecté ("${rawOverrides}") — remplacé par "overrides"`);
+    }
+    const safeOverridesDir = containsPath(tmpDir, resolvedOverrides)
+      ? resolvedOverrides
+      : path.join(tmpDir, 'overrides');
+
     const iconData = extractIcon(tmpDir);
 
     return {
@@ -87,13 +67,13 @@ class ModpackParser {
       mcVersion:        mcInfo.version,
       modloader:        loader,
       modloaderVersion: mlVersion,
-      files:            (manifest.files || []).map(f => ({
+      files: (manifest.files || []).map(f => ({
         type:      'curseforge',
         projectID: f.projectID,
         fileID:    f.fileID,
         required:  f.required !== false,
       })),
-      overridesDir: path.join(tmpDir, manifest.overrides || 'overrides'),
+      overridesDir: safeOverridesDir,
       iconData,
       tmpDir,
     };
@@ -107,13 +87,12 @@ class ModpackParser {
       log(`⚠ Format Modrinth v${manifest.formatVersion} (seul v1 supporté officiellement)`);
     }
 
-    const deps    = manifest.dependencies || {};
-    const mcVer   = deps['minecraft'];
+    const deps = manifest.dependencies || {};
+    const mcVer = deps['minecraft'];
     const { loader, version: mlVersion } = detectModrinthLoader(deps);
 
     log(`Modrinth: ${manifest.name} v${manifest.versionId}`);
-    log(`  MC ${mcVer} — ${loader} ${mlVersion}`);
-    log(`  ${manifest.files?.length ?? 0} fichiers`);
+    log(`  MC ${mcVer} — ${loader} ${mlVersion} — ${manifest.files?.length ?? 0} fichiers`);
 
     const iconData = extractIcon(tmpDir);
 
@@ -125,14 +104,15 @@ class ModpackParser {
       mcVersion:        mcVer,
       modloader:        loader,
       modloaderVersion: mlVersion,
-      files:            (manifest.files || []).map(f => ({
-        type:    'modrinth',
-        url:     f.downloads?.[0],
-        urls:    f.downloads || [],
-        sha512:  f.hashes?.sha512,
-        sha1:    f.hashes?.sha1,
-        path:    f.path,
-        size:    f.fileSize,
+      files: (manifest.files || []).map(f => ({
+        type:   'modrinth',
+        url:    f.downloads?.[0],
+        urls:   f.downloads || [],
+        sha512: f.hashes?.sha512,
+        sha1:   f.hashes?.sha1,
+        // SECURITY: path will be sanitized later by installer.js using safeDest()
+        path:   f.path,
+        size:   f.fileSize,
       })),
       overridesDir: path.join(tmpDir, 'overrides'),
       iconData,
@@ -141,24 +121,53 @@ class ModpackParser {
   }
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Security helpers ──────────────────────────────────────────────────────────
 
 /**
- * Parse a CurseForge loader string like "forge-47.4.0" or "neoforge-20.4.0"
+ * Returns true iff `child` is strictly inside `parent`.
+ * Uses path.resolve() so '..' sequences are already collapsed.
  */
-function parseLoaderString(str) {
-  const parts = str.split('-');
-  const loader = parts[0].toLowerCase();
-  const version = parts.slice(1).join('-');
-  return {
-    loader: normalizeLoader(loader),
-    version,
-  };
+function containsPath(parent, child) {
+  const rel = path.relative(parent, child);
+  // rel must not start with '..' and must not be an absolute path
+  return rel.length > 0 && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
 /**
- * Detect modloader from Modrinth dependencies map
+ * Build a safe destination path for a Modrinth file entry.
+ * Rejects / strips any path component that would escape instanceDir.
+ *
+ * @param {string} rawPath   - f.path from modrinth.index.json
+ * @param {string} instanceDir
+ * @returns {string} safe absolute destination path
+ * @throws {Error} if the path cannot be made safe
  */
+function safeDest(rawPath, instanceDir) {
+  if (!rawPath || typeof rawPath !== 'string') {
+    throw new Error(`Modrinth file entry has no path`);
+  }
+
+  // Normalise: remove leading slashes/dots, resolve '..' in the middle
+  const stripped   = rawPath.replace(/^[/\\]+/, '');
+  const resolved   = path.resolve(instanceDir, stripped);
+
+  if (!containsPath(instanceDir, resolved)) {
+    throw new Error(
+      `Path traversal détecté dans le manifest Modrinth: "${rawPath}" ` +
+      `→ "${resolved}" sort de "${instanceDir}"`
+    );
+  }
+  return resolved;
+}
+
+// ── Parsing helpers ───────────────────────────────────────────────────────────
+
+function parseLoaderString(str) {
+  const parts  = str.split('-');
+  const loader = parts[0].toLowerCase();
+  return { loader: normalizeLoader(loader), version: parts.slice(1).join('-') };
+}
+
 function detectModrinthLoader(deps) {
   for (const [key, version] of Object.entries(deps)) {
     const loader = normalizeLoader(key);
@@ -176,10 +185,6 @@ function normalizeLoader(str) {
   return 'unknown';
 }
 
-/**
- * Look for a modpack icon in common locations within extracted tmpDir.
- * Returns a data URL string or null.
- */
 function extractIcon(tmpDir) {
   const candidates = [
     'icon.png', 'icon.jpg', 'icon.jpeg', 'icon.webp',
@@ -188,7 +193,9 @@ function extractIcon(tmpDir) {
     path.join('overrides', 'logo.png'),
   ];
   for (const rel of candidates) {
-    const full = path.join(tmpDir, rel);
+    // SECURITY: ensure the candidate doesn't escape tmpDir
+    const full = path.resolve(tmpDir, rel);
+    if (!containsPath(tmpDir, full)) continue;
     if (fs.existsSync(full)) {
       try {
         const ext  = path.extname(rel).slice(1).replace('jpg', 'jpeg');
@@ -200,4 +207,7 @@ function extractIcon(tmpDir) {
   return null;
 }
 
+// Export safeDest so installer.js can use it
 module.exports = ModpackParser;
+module.exports.safeDest = safeDest;
+module.exports.containsPath = containsPath;
