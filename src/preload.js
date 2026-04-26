@@ -62,6 +62,11 @@ contextBridge.exposeInMainWorld('px', {
     fetchIcon:    (params) => ipcRenderer.invoke('modpack:fetch-icon', params),
   },
   app:   { version: () => ipcRenderer.invoke('app:version') },
+  updates: {
+    getState:   () => ipcRenderer.invoke('updates:get-state'),
+    check:      () => ipcRenderer.invoke('updates:check'),
+    installNow: () => ipcRenderer.invoke('updates:install-now'),
+  },
   system: {
     ram: () => ipcRenderer.invoke('system:ram'),
   },

@@ -643,6 +643,22 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
               </div>
             </div>
           </div>
+          <div class="settings-card" style="grid-column:1/-1">
+            <h3 data-i18n="settings.updates">Mises a jour</h3>
+            <div class="form-group" style="max-width:520px">
+              <label class="form-label" for="inp-update-channel" data-i18n="settings.update_channel">Canal de mise a jour</label>
+              <select class="form-input" id="inp-update-channel">
+                <option value="stable" data-i18n="settings.update_channel_stable">Stable</option>
+                <option value="beta" data-i18n="settings.update_channel_beta">Beta</option>
+              </select>
+              <div class="form-hint" data-i18n="settings.update_channel_hint">Stable pour la fiabilite, Beta pour recevoir les nouveautes en avance.</div>
+              <div class="form-hint" id="update-status" data-i18n="settings.update_status_idle" style="margin-top:12px">Verification des mises a jour inactive.</div>
+              <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px">
+                <button class="btn-ghost" id="btn-check-updates" data-i18n="settings.btn.check_updates">Verifier les mises a jour</button>
+                <button class="btn-primary" id="btn-update-install" style="display:none" data-i18n="settings.btn.install_update">Redemarrer et installer</button>
+              </div>
+            </div>
+          </div>
         </div>
         <div class="settings-footer">
           <button class="btn-primary" id="btn-save-settings"><span data-i18n="settings.btn.save">Sauvegarder</span></button>

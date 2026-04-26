@@ -17,6 +17,10 @@ const NeoForgeManager  = require('./core/runtime/neoforge');
 const FabricManager    = require('./core/runtime/fabric');
 const GameLauncher     = require('./core/runtime/launcher');
 const Store            = require('./core/utils/store');
+let autoUpdater = null;
+try {
+  ({ autoUpdater } = require('electron-updater'));
+} catch {}
 
 const store   = new Store();
 const auth    = new MicrosoftAuth(store);
@@ -48,12 +52,16 @@ function sanitizeSettings(input, current = {}) {
   if (typeof cur.forceOffline === 'boolean') out.forceOffline = cur.forceOffline;
   if (typeof cur.cfApiKey === 'string') out.cfApiKey = cur.cfApiKey.trim().slice(0, 256);
   if (typeof cur.language === 'string' && ['fr', 'en'].includes(cur.language)) out.language = cur.language;
+  if (typeof cur.updateChannel === 'string' && ['stable', 'beta'].includes(cur.updateChannel)) out.updateChannel = cur.updateChannel;
 
   if (Number.isFinite(+src.ram)) out.ram = Math.max(1, Math.min(32, Math.round(+src.ram)));
   if (typeof src.username === 'string') out.username = src.username.trim().slice(0, 16);
   if (typeof src.forceOffline === 'boolean') out.forceOffline = src.forceOffline;
   if (typeof src.cfApiKey === 'string') out.cfApiKey = src.cfApiKey.trim().slice(0, 256);
   if (typeof src.language === 'string' && ['fr', 'en'].includes(src.language)) out.language = src.language;
+  if (typeof src.updateChannel === 'string' && ['stable', 'beta'].includes(src.updateChannel)) out.updateChannel = src.updateChannel;
+
+  if (!out.updateChannel) out.updateChannel = 'stable';
 
   return out;
 }
@@ -129,15 +137,204 @@ function createWindow() {
   });
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.webContents.on('did-finish-load', () => {
+    emitUpdaterState();
+  });
   if (isDev) mainWindow.webContents.openDevTools({ mode: 'detach' });
   mainWindow.on('closed', () => { mainWindow = null; });
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  createWindow();
+  setupAutoUpdater();
+});
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 app.on('activate', () => { if (!mainWindow) createWindow(); });
 
 const send = (ch, data) => mainWindow?.webContents?.send(ch, data);
+
+let updaterReady = false;
+let updaterEventsBound = false;
+let updaterCheckPromise = null;
+let updaterState = {
+  available: false,
+  enabled: false,
+  channel: 'stable',
+  status: 'idle',
+  message: '',
+  progress: 0,
+  updateVersion: null,
+  currentVersion: app.getVersion(),
+};
+
+function emitUpdaterState() {
+  updaterState.currentVersion = app.getVersion();
+  send('updates:status', updaterState);
+}
+
+function setUpdaterState(patch = {}) {
+  updaterState = Object.assign({}, updaterState, patch, { currentVersion: app.getVersion() });
+  emitUpdaterState();
+  return updaterState;
+}
+
+function normalizeUpdateChannel(channel) {
+  return channel === 'beta' ? 'beta' : 'stable';
+}
+
+function applyUpdateChannel(channel) {
+  const normalized = normalizeUpdateChannel(channel);
+  updaterState.channel = normalized;
+  if (!autoUpdater) return normalized;
+  autoUpdater.channel = normalized === 'beta' ? 'beta' : 'latest';
+  autoUpdater.allowPrerelease = normalized === 'beta';
+  autoUpdater.allowDowngrade = true;
+  return normalized;
+}
+
+function bindAutoUpdaterEvents() {
+  if (!autoUpdater || updaterEventsBound) return;
+  updaterEventsBound = true;
+
+  autoUpdater.on('checking-for-update', () => {
+    setUpdaterState({
+      status: 'checking',
+      message: 'Checking for updates...',
+      progress: 0,
+      updateVersion: null,
+    });
+  });
+
+  autoUpdater.on('update-available', (info) => {
+    const version = info?.version || null;
+    setUpdaterState({
+      status: 'downloading',
+      message: version ? `Update ${version} found. Downloading...` : 'Update found. Downloading...',
+      progress: 0,
+      updateVersion: version,
+    });
+  });
+
+  autoUpdater.on('download-progress', (progressObj) => {
+    const pct = Math.max(0, Math.min(100, Math.round(progressObj?.percent || 0)));
+    setUpdaterState({
+      status: 'downloading',
+      message: `Downloading update... ${pct}%`,
+      progress: pct,
+    });
+  });
+
+  autoUpdater.on('update-not-available', () => {
+    setUpdaterState({
+      status: 'up_to_date',
+      message: 'You already have the latest version.',
+      progress: 0,
+      updateVersion: null,
+    });
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    const version = info?.version || updaterState.updateVersion || null;
+    setUpdaterState({
+      status: 'downloaded',
+      message: version ? `Update ${version} is ready. Restart to install.` : 'Update ready. Restart to install.',
+      progress: 100,
+      updateVersion: version,
+    });
+  });
+
+  autoUpdater.on('error', (err) => {
+    setUpdaterState({
+      status: 'error',
+      message: `Update error: ${err?.message || String(err)}`,
+    });
+  });
+}
+
+function setupAutoUpdater() {
+  if (!autoUpdater) {
+    updaterReady = false;
+    setUpdaterState({
+      available: false,
+      enabled: false,
+      status: 'disabled',
+      message: 'Auto-update unavailable (electron-updater missing).',
+    });
+    return;
+  }
+  if (!app.isPackaged) {
+    updaterReady = false;
+    setUpdaterState({
+      available: false,
+      enabled: false,
+      status: 'disabled',
+      message: 'Auto-update disabled in development mode.',
+    });
+    return;
+  }
+
+  bindAutoUpdaterEvents();
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.allowDowngrade = true;
+
+  const settings = sanitizeSettings(store.get('settings'), store.get('settings'));
+  applyUpdateChannel(settings.updateChannel);
+
+  updaterReady = true;
+  setUpdaterState({
+    available: true,
+    enabled: true,
+    status: 'idle',
+    message: `Auto-update ready (${updaterState.channel}).`,
+    progress: 0,
+  });
+
+  setTimeout(() => {
+    checkForUpdates('startup').catch(() => {});
+  }, 3500);
+}
+
+async function checkForUpdates(reason = 'manual') {
+  if (!updaterReady || !autoUpdater) {
+    return { ok: false, error: updaterState.message || 'Auto-update unavailable' };
+  }
+  if (updaterCheckPromise) return updaterCheckPromise;
+
+  updaterCheckPromise = (async () => {
+    try {
+      setUpdaterState({
+        status: 'checking',
+        message: reason === 'manual' ? 'Checking for updates...' : 'Checking updates in background...',
+        progress: 0,
+      });
+      await autoUpdater.checkForUpdates();
+      return { ok: true };
+    } catch (e) {
+      const errorMsg = e?.message || String(e);
+      setUpdaterState({
+        status: 'error',
+        message: `Update check failed: ${errorMsg}`,
+      });
+      return { ok: false, error: errorMsg };
+    } finally {
+      updaterCheckPromise = null;
+    }
+  })();
+
+  return updaterCheckPromise;
+}
+
+function installDownloadedUpdateNow() {
+  if (!updaterReady || !autoUpdater) return { ok: false, error: 'Auto-update unavailable' };
+  if (updaterState.status !== 'downloaded') {
+    return { ok: false, error: 'No downloaded update available' };
+  }
+  setImmediate(() => {
+    autoUpdater.quitAndInstall(false, true);
+  });
+  return { ok: true };
+}
 
 ipcMain.on('win:minimize', () => mainWindow?.minimize());
 ipcMain.on('win:maximize', () => mainWindow?.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize());
@@ -150,11 +347,24 @@ ipcMain.handle('config:set', (_, key, value) => {
     console.warn('[config:set] Rejected key:', key);
     return false;
   }
-  const safe = sanitizeSettings(value, store.get('settings'));
+  const current = sanitizeSettings(store.get('settings'), store.get('settings'));
+  const safe = sanitizeSettings(value, current);
   store.set('settings', safe);
+  if (updaterReady && current.updateChannel !== safe.updateChannel) {
+    applyUpdateChannel(safe.updateChannel);
+    setUpdaterState({
+      status: 'idle',
+      message: `Update channel switched to ${safe.updateChannel}.`,
+      progress: 0,
+    });
+    checkForUpdates('channel-switch').catch(() => {});
+  }
   return true;
 });
 ipcMain.handle('app:version', () => app.getVersion());
+ipcMain.handle('updates:get-state', () => updaterState);
+ipcMain.handle('updates:check', async () => checkForUpdates('manual'));
+ipcMain.handle('updates:install-now', () => installDownloadedUpdateNow());
 
 // ── System info ───────────────────────────────────────────────────────────────
 ipcMain.handle('system:ram', () => {

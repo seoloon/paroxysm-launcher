@@ -954,6 +954,61 @@ $('btn-logout').addEventListener('click',async function(){if(!confirm(t('auth.lo
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 let _systemRamGB = 0;
+let _lastUpdateState = null;
+
+function renderUpdateState(state){
+  const statusEl = $('update-status');
+  const checkBtn = $('btn-check-updates');
+  const installBtn = $('btn-update-install');
+  const channelSel = $('inp-update-channel');
+  if (!statusEl || !checkBtn || !installBtn || !channelSel) return;
+
+  const st = state || {};
+  _lastUpdateState = st;
+
+  if (st.channel === 'stable' || st.channel === 'beta') {
+    channelSel.value = st.channel;
+  }
+
+  const available = !!st.available && !!st.enabled;
+  checkBtn.disabled = !available;
+  installBtn.style.display = st.status === 'downloaded' ? 'inline-flex' : 'none';
+  installBtn.disabled = st.status !== 'downloaded';
+
+  if (!available) {
+    statusEl.textContent = t('settings.update_status_disabled', { message: st.message || t('error.unknown') });
+    return;
+  }
+
+  if (st.status === 'checking') {
+    statusEl.textContent = t('settings.update_status_checking');
+    return;
+  }
+  if (st.status === 'up_to_date') {
+    statusEl.textContent = t('settings.update_status_up_to_date', { version: st.currentVersion || '?' });
+    return;
+  }
+  if (st.status === 'downloading') {
+    statusEl.textContent = t('settings.update_status_downloading', { percent: Math.max(0, Math.min(100, Math.round(st.progress || 0))) });
+    return;
+  }
+  if (st.status === 'downloaded') {
+    statusEl.textContent = t('settings.update_status_downloaded', { version: st.updateVersion || '?' });
+    return;
+  }
+  if (st.status === 'error') {
+    statusEl.textContent = t('settings.update_status_error', { message: st.message || t('error.unknown') });
+    return;
+  }
+
+  statusEl.textContent = t('settings.update_status_idle');
+}
+
+async function initUpdaterUi(){
+  if (!px.updates || typeof px.updates.getState !== 'function') return;
+  const state = await px.updates.getState().catch(() => null);
+  if (state) renderUpdateState(state);
+}
 
 async function loadSettings(){
   const cfg=await px.config.get('settings')||{};
@@ -987,6 +1042,8 @@ async function loadSettings(){
   updateRamWarning(savedRam);
 
   $('inp-username').value=cfg.username||'';$('inp-force-offline').checked=cfg.forceOffline||false;$('inp-cf-key').value=cfg.cfApiKey||'';
+  if ($('inp-update-channel')) $('inp-update-channel').value = cfg.updateChannel === 'beta' ? 'beta' : 'stable';
+  await initUpdaterUi();
   // Re-apply dynamic auth labels after i18n static pass.
   await refreshAuth();
 }
@@ -1021,12 +1078,25 @@ $('inp-ram').addEventListener('input',function(){
 });
 async function saveAllSettings(){
   const lang=window.i18n?window.i18n.getLang():'fr';
-  await px.config.set('settings',{ram:parseInt($('inp-ram').value),username:$('inp-username').value.trim(),forceOffline:$('inp-force-offline').checked,cfApiKey:$('inp-cf-key').value.trim(),language:lang});
+  const updateChannel = $('inp-update-channel')?.value === 'beta' ? 'beta' : 'stable';
+  await px.config.set('settings',{ram:parseInt($('inp-ram').value),username:$('inp-username').value.trim(),forceOffline:$('inp-force-offline').checked,cfApiKey:$('inp-cf-key').value.trim(),language:lang,updateChannel});
   document.querySelectorAll('.save-confirm').forEach(c=>{c.style.display='inline';setTimeout(()=>{c.style.display='none';},2000);});
 }
 $('btn-save-settings').addEventListener('click',saveAllSettings);
 $('btn-save-profile').addEventListener('click',saveAllSettings);
 $('btn-open-dir').addEventListener('click',async function(){const p=await px.config.get('__dataPath__');if(p)px.shell.open(p);});
+$('btn-check-updates').addEventListener('click', async function(){
+  if (!px.updates || typeof px.updates.check !== 'function') return;
+  this.disabled = true;
+  const result = await px.updates.check().catch(() => ({ ok: false, error: t('error.unknown') }));
+  this.disabled = false;
+  if (!result?.ok && result?.error) notifyError(result.error);
+});
+$('btn-update-install').addEventListener('click', async function(){
+  if (!px.updates || typeof px.updates.installNow !== 'function') return;
+  const result = await px.updates.installNow().catch(() => ({ ok: false, error: t('error.unknown') }));
+  if (!result?.ok && result?.error) notifyError(result.error);
+});
 // cf-link is re-attached by i18n.js applyTranslations after innerHTML update
 
 // ── Language selector ─────────────────────────────────────────────────────────
@@ -1049,6 +1119,7 @@ document.querySelectorAll('.lang-btn').forEach(btn=>{
     updateRamWarning(parseInt($('inp-ram').value)||4);
     const ramSI=$('ram-system-info');
     if(ramSI&&_systemRamGB)ramSI.textContent=t('settings.ram_system',{n:_systemRamGB});
+    renderUpdateState(_lastUpdateState);
     // Re-run refreshAuth so acct-name/acct-status show correct translated strings
     refreshAuth();
     saveAllSettings().catch(()=>{});
@@ -1504,6 +1575,7 @@ px.on('install:progress',({step,pct,detail})=>updateStep(step,pct,detail));
 px.on('install:log',msg=>appendLog(msg));
 px.on('install:error',msg=>showModalError(msg));
 px.on('install:done',()=>{updateStep('done',100,t('install.done'));$('modal-close-btn').style.display='block';});
+px.on('updates:status',state=>renderUpdateState(state));
 
 // ── Icon fetch after import ───────────────────────────────────────────────────
 // After a modpack is added to library, if it has no icon try to fetch one from Modrinth

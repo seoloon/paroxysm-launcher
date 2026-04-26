@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "electron-store": "^8.1.0",
+    "electron-updater": "^6.6.2",
     "extract-zip": "^2.0.1",
     "follow-redirects": "^1.15.6",
     "node-fetch": "^2.7.0"
@@ -50,6 +51,14 @@
       "uninstallerIcon": "assets/icon.ico",
       "artifactName": "Paroxysm-Setup-${version}.${ext}"
     },
+    "generateUpdatesFilesForAllChannels": true,
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "seoloon",
+        "repo": "paroxysm-launcher"
+      }
+    ],
     "files": ["src/**/*", "assets/**/*"]
   }
 }
