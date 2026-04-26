@@ -43,10 +43,6 @@
       "shortcutName": "Paroxysm Launcher",
       "createDesktopShortcut": true,
       "installerIcon": "assets/icon.ico",
-      "installerHeaderIcon": "assets/icon.ico",
-      "installerHeader": "assets/installer/header.bmp",
-      "installerSidebar": "assets/installer/sidebar.bmp",
-      "uninstallerSidebar": "assets/installer/uninstaller-sidebar.bmp",
       "uninstallerIcon": "assets/icon.ico",
       "artifactName": "Paroxysm-Setup-${version}.${ext}"
     },
