@@ -22,6 +22,7 @@ const MC_DIR      = path.join(Store.BASE_DIR, 'minecraft');
 const LIBS_DIR    = path.join(MC_DIR, 'libraries');
 const ASSETS_DIR  = path.join(MC_DIR, 'assets');
 const FABRIC_META = 'https://meta.fabricmc.net/v2';
+const QUILT_META  = 'https://meta.quiltmc.org/v3';
 
 class FabricManager {
   /**
@@ -30,31 +31,48 @@ class FabricManager {
    *
    * @returns {string} versionId (ex: "fabric-loader-0.15.11-1.20.1")
    */
-  static async ensure(mcVersion, loaderVersion, javaPath, onProgress = () => {}) {
-    const versionId   = `fabric-loader-${loaderVersion}-${mcVersion}`;
+  static async ensure(mcVersion, loaderVersion, javaPath, onProgress = () => {}, loader = 'fabric') {
+    const isQuilt = loader === 'quilt';
+    const loaderLabel = isQuilt ? 'Quilt' : 'Fabric';
+    const fallbackVersionId = `${isQuilt ? 'quilt' : 'fabric'}-loader-${loaderVersion}-${mcVersion}`;
+    const profileUrl = isQuilt
+      ? `${QUILT_META}/versions/loader/${mcVersion}/${loaderVersion}/profile/json`
+      : `${FABRIC_META}/versions/loader/${mcVersion}/${loaderVersion}/profile/json`;
+
+    onProgress(5, `Vérification de ${loaderLabel} ${loaderVersion}...`);
+
+    // Reuse cached profile when present (faster and works offline).
+    const fallbackDir = path.join(MC_DIR, 'versions', fallbackVersionId);
+    const fallbackJson = path.join(fallbackDir, `${fallbackVersionId}.json`);
+    let profile = null;
+    let versionId = fallbackVersionId;
+    if (fs.existsSync(fallbackJson)) {
+      profile = JSON.parse(fs.readFileSync(fallbackJson, 'utf8'));
+      onProgress(10, `Profil ${loaderLabel} en cache`);
+    }
+    if (!profile) {
+      onProgress(10, `Téléchargement profil ${loaderLabel} ${loaderVersion}...`);
+      profile = await fetchJSON(profileUrl);
+      versionId = profile?.id || fallbackVersionId;
+    }
+
     const versionDir  = path.join(MC_DIR, 'versions', versionId);
     const versionJson = path.join(versionDir, `${versionId}.json`);
-
-    onProgress(5, `Vérification de Fabric ${loaderVersion}...`);
-
-    // Télécharger le profil Fabric si absent
-    let profile;
-    if (fs.existsSync(versionJson)) {
-      profile = JSON.parse(fs.readFileSync(versionJson, 'utf8'));
-    } else {
-      onProgress(10, `Téléchargement profil Fabric ${loaderVersion}...`);
-      const profileUrl = `${FABRIC_META}/versions/loader/${mcVersion}/${loaderVersion}/profile/json`;
-      profile = await fetchJSON(profileUrl);
+    if (!fs.existsSync(versionJson)) {
       fs.mkdirSync(versionDir, { recursive: true });
       fs.writeFileSync(versionJson, JSON.stringify(profile, null, 2));
     }
 
-    // Télécharger les bibliothèques Fabric
+    // Télécharger les bibliothèques du loader
     const libs = profile.libraries || [];
-    onProgress(15, `Téléchargement de ${libs.length} bibliothèques Fabric...`);
-    await FabricManager._downloadLibraries(libs, (pct, detail) => {
-      onProgress(15 + Math.round(pct * 0.5), detail);
-    });
+    onProgress(15, `Téléchargement de ${libs.length} bibliothèques ${loaderLabel}...`);
+    await FabricManager._downloadLibraries(
+      libs,
+      isQuilt ? 'https://maven.quiltmc.org/repository/release/' : 'https://maven.fabricmc.net/',
+      (pct, detail) => {
+        onProgress(15 + Math.round(pct * 0.5), detail);
+      }
+    );
 
     // Télécharger les assets (indispensable — sans eux MC lance et crash immédiatement)
     onProgress(65, 'Téléchargement des assets Minecraft...');
@@ -62,12 +80,12 @@ class FabricManager {
       onProgress(65 + Math.round(pct * 0.33), detail);
     });
 
-    onProgress(100, `Fabric ${loaderVersion} prêt`);
+    onProgress(100, `${loaderLabel} ${loaderVersion} prêt`);
     return versionId;
   }
 
   // ── Bibliothèques Fabric ──────────────────────────────────────────────────
-  static async _downloadLibraries(libs, onProgress = () => {}) {
+  static async _downloadLibraries(libs, defaultMavenBase, onProgress = () => {}) {
     const toDownload = [];
 
     for (const lib of libs) {
@@ -84,7 +102,7 @@ class FabricManager {
 
       // lib.url = base maven (ex: "https://maven.fabricmc.net/")
       // Certaines libs n'ont pas de lib.url → maven central ou fabricmc
-      const base = (lib.url || 'https://maven.fabricmc.net/').replace(/\/$/, '');
+      const base = (lib.url || defaultMavenBase || 'https://maven.fabricmc.net/').replace(/\/$/, '');
       const url  = `${base}/${groupSlash}/${art}/${ver}/${jarName}`;
 
       toDownload.push({ url, dest, name: lib.name });
