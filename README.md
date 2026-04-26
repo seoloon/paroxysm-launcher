@@ -3,8 +3,9 @@ A high-performance, bloat-free Electron-based launcher designed for power users.
 
 Actively working on it, release planned for May 2026.
 
-Official website : https://paroxysm.seoloon.work/
-Official Discord : https://discord.gg/MwVPxNXych
+Official website : https://paroxysm.seoloon.work/Official
+Discord : https://discord.gg/MwVPxNXych
+Official YouTube : https://www.youtube.com/@paroxysm_launcher
 Official mail : contact@seoloon.work
 
 ## License
