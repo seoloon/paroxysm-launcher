@@ -1,6 +1,6 @@
 {
   "name": "paroxysm-launcher",
-  "version": "1.0.0-beta",
+  "version": "playtest-1.0.0-alpha",
   "description": "Paroxysm Launcher — The final Minecraft launcher",
   "author": "Seoloon",
   "main": "src/main.js",

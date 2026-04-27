@@ -14,11 +14,37 @@ class ModpackLibrary {
 
   _all() { return this._store.get('library') || {}; }
 
-  list() {
-    return Object.values(this._all()).sort((a,b) => new Date(b.addedAt) - new Date(a.addedAt));
+  _countInstalledMods(entry) {
+    try {
+      const modsDir = entry?.modsDir;
+      if (!modsDir || !fs.existsSync(modsDir)) return 0;
+      return fs.readdirSync(modsDir, { withFileTypes: true })
+        .filter(d => d.isFile() && /\.jar$/i.test(d.name))
+        .length;
+    } catch {
+      return 0;
+    }
   }
 
-  get(id) { return this._all()[id] ?? null; }
+  _withRuntimeStats(entry) {
+    if (!entry || typeof entry !== 'object') return entry;
+    const installedMods = this._countInstalledMods(entry);
+    return {
+      ...entry,
+      totalMods: installedMods,
+    };
+  }
+
+  list() {
+    return Object.values(this._all())
+      .map(e => this._withRuntimeStats(e))
+      .sort((a,b) => new Date(b.addedAt) - new Date(a.addedAt));
+  }
+
+  get(id) {
+    const entry = this._all()[id] ?? null;
+    return entry ? this._withRuntimeStats(entry) : null;
+  }
 
   /**
    * @param {object} parsed        - ParsedModpack

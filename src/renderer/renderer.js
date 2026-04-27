@@ -95,8 +95,11 @@ function setKillButtonState(btnId, visible, disabled = false, labelKey = 'pack.k
   if(!btn)return;
   btn.style.display=visible?'inline-flex':'none';
   btn.disabled=disabled;
+  const labelText=t(labelKey);
+  btn.title=labelText;
+  btn.setAttribute('aria-label', labelText);
   const label=btn.querySelector('span');
-  if(label)label.textContent=t(labelKey);
+  if(label)label.textContent=labelText;
 }
 function syncPlayPanelControls(){
   const playBtn=$('btn-play');
@@ -142,6 +145,7 @@ function showPage(name){
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
   $('page-'+name)?.classList.add('active');
   document.querySelectorAll('[data-page="'+name+'"]').forEach(b=>b.classList.add('active'));
+  if(name==='library'){loadLibrary().catch(()=>{});}
   if(name==='browse' && mrState.firstLoad){mrState.firstLoad=false; mrSearch();}
   px.rpc?.setPage?.(name).catch?.(()=>{});
 }
@@ -150,7 +154,11 @@ document.querySelectorAll('.nav-btn, .account-mini').forEach(btn=>{
 });
 
 // ── Library ──────────────────────────────────────────────────────────────────
-async function loadLibrary(){allPacks=await px.library.list();renderLibrary(allPacks);}
+async function loadLibrary(){allPacks=await px.library.list();applyLibraryFilter();}
+function applyLibraryFilter(){
+  const q=($('inp-search')?.value||'').toLowerCase().trim();
+  renderLibrary(q?allPacks.filter(p=>p.name.toLowerCase().includes(q)||p.mcVersion.includes(q)||p.modloader.includes(q)):allPacks);
+}
 function renderLibrary(packs){
   const grid=$('lib-grid'),empty=$('lib-empty'),count=$('lib-count'),n=packs.length;
   count.textContent=n?(n===1?t('lib.count',{n}):t('lib.count_plural',{n})):t('lib.empty.title');
@@ -170,12 +178,10 @@ function renderLibrary(packs){
   <span class="card-foreground-fallback" style="display:none">${initials}</span>
 </div>`
       : `<div class="card-foreground-icon"><span class="card-foreground-fallback">${initials}</span></div>`;
-    const isCustom = p.format === 'custom';
     return `<div class="modpack-card" data-id="${esc(p.id)}">
 <div class="card-banner">${bannerContent}
 ${foregroundIcon}
 <span class="card-badge ${badge}">${loaderName}</span>
-${isCustom ? '<span class="card-badge" style="background:rgba(16,185,129,.2);color:var(--green);border-color:rgba(16,185,129,.3);right:auto;left:8px">'+t('badge.custom')+'</span>' : ''}
 <button class="card-del" data-del="${esc(p.id)}"><svg viewBox="0 0 14 14" fill="none"><path d="M2 3.5h10M5 3.5V2.5h4v1M3 3.5l.8 8h6.4l.8-8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
 <button class="card-gear" data-settings="${esc(p.id)}" title="${t('lib.card.settings')}"><svg viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="2"/><path d="M7 1.5v1M7 11.5v1M1.5 7h1M11.5 7h1M3.1 3.1l.7.7M10.2 10.2l.7.7M10.2 3.8l-.7.7M3.8 10.2l-.7.7" stroke-linecap="round"/></svg></button></div>
 <div class="card-body"><div class="card-name" title="${esc(p.name)}">${esc(p.name)}</div>
@@ -206,7 +212,12 @@ async function deleteModpack(pack){
   if(!confirm(t('delete.confirm',{name:pack.name})))return;
   await px.library.delete(pack.id);if(currentPack?.id===pack.id)closePlayPanel();await loadLibrary();
 }
-$('inp-search').addEventListener('input',function(){const q=this.value.toLowerCase().trim();renderLibrary(q?allPacks.filter(p=>p.name.toLowerCase().includes(q)||p.mcVersion.includes(q)||p.modloader.includes(q)):allPacks);});
+$('inp-search').addEventListener('input',()=>applyLibraryFilter());
+setInterval(()=>{
+  if($('page-library')?.classList.contains('active') && !isInstalling){
+    loadLibrary().catch(()=>{});
+  }
+}, 5000);
 
 // ── Import ────────────────────────────────────────────────────────────────────
 async function doImport(){
@@ -1348,7 +1359,7 @@ async function loadMrVersions() {
     versions.forEach(v => {
       const opt = document.createElement('option');
       opt.value = v; opt.textContent = v;
-      if (v === current || (!current && v === '1.20.1')) opt.selected = true;
+      if (v === current) opt.selected = true;
       sel.appendChild(opt);
     });
     mrState.version = sel.value;
@@ -1504,6 +1515,8 @@ async function openMrDetail(projectId){
   });
   const mcVersionsSorted = [...mcVersionSet].sort((a,b)=>b.localeCompare(a,undefined,{numeric:true}));
   const loadersSorted = [...loaderSet].sort();
+  const detailDefaultMc = (mrState.version && mcVersionSet.has(mrState.version)) ? mrState.version : '';
+  const detailDefaultLoader = (mrState.loader && loaderSet.has(mrState.loader)) ? mrState.loader : '';
 
   const versionsSection = allVersions.length ? `
 <div class="mr-versions-section">
@@ -1512,11 +1525,11 @@ async function openMrDetail(projectId){
   <div style="display:flex;gap:8px;flex-wrap:wrap">
     <select id="mr-dv-mc" class="mr-select" style="font-size:11px;padding:5px 8px;min-width:100px">
       <option value="">${t('mr.filter.all_mc')}</option>
-      ${mcVersionsSorted.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('')}
+      ${mcVersionsSorted.map(v=>`<option value="${esc(v)}"${v===detailDefaultMc?' selected':''}>${esc(v)}</option>`).join('')}
     </select>
     ${loadersSorted.length>1?`<select id="mr-dv-loader" class="mr-select" style="font-size:11px;padding:5px 8px;min-width:90px">
       <option value="">${t('mr.filter.all_loaders')}</option>
-      ${loadersSorted.map(l=>`<option value="${esc(l)}">${esc(l)}</option>`).join('')}
+      ${loadersSorted.map(l=>`<option value="${esc(l)}"${l===detailDefaultLoader?' selected':''}>${esc(l)}</option>`).join('')}
     </select>`:''}
   </div>
 </div>
@@ -1564,6 +1577,7 @@ ${versionsSection}
   }
   $('mr-dv-mc')?.addEventListener('change', filterDetailVersions);
   $('mr-dv-loader')?.addEventListener('change', filterDetailVersions);
+  filterDetailVersions();
 
   // Download buttons — intercept non-modpacks for instance picking
   $('mr-detail-content').querySelectorAll('.mr-dl-btn').forEach(btn=>{
@@ -1775,6 +1789,7 @@ async function handleContentDownload(btn, project, versionObj, projectType) {
         btn.innerHTML = `${t('mr.downloaded')} → ${esc(instName)}`;
         btn.style.background = 'var(--green)';
         btn.style.fontSize   = '11px';
+        await loadLibrary();
       } else {
         btn.disabled = false;
         btn.innerHTML = '<svg viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6l3 3 3-3" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 11h10" stroke-linecap="round"/></svg> '+t('mr.retry');
