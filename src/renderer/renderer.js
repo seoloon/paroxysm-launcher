@@ -97,6 +97,7 @@ function showPage(name){
   $('page-'+name)?.classList.add('active');
   document.querySelectorAll('[data-page="'+name+'"]').forEach(b=>b.classList.add('active'));
   if(name==='browse' && mrState.firstLoad){mrState.firstLoad=false; mrSearch();}
+  px.rpc?.setPage?.(name).catch?.(()=>{});
 }
 document.querySelectorAll('.nav-btn, .account-mini').forEach(btn=>{
   btn.addEventListener('click',()=>{if(btn.dataset.page)showPage(btn.dataset.page);});
@@ -113,12 +114,20 @@ function renderLibrary(packs){
     const badge={forge:'badge-forge',neoforge:'badge-neoforge',fabric:'badge-fabric',quilt:'badge-quilt',vanilla:'badge-vanilla'}[p.modloader]||'badge-vanilla';
     const loaderName=getLoaderDisplayName(p.modloader);
     const last=p.lastPlayed?new Date(p.lastPlayed).toLocaleDateString():t('pack.never_played');
+    const initials=esc(p.name.substring(0,2).toUpperCase());
     const bannerContent = p.iconData
       ? `<img src="${esc(p.iconData)}" alt="" class="lib-banner-img" style="width:100%;height:100%;object-fit:cover;border-radius:inherit">`
-      : `<div class="card-letter">${esc(p.name.substring(0,2).toUpperCase())}</div>`;
+      : `<div class="card-letter">${initials}</div>`;
+    const foregroundIcon = p.iconData
+      ? `<div class="card-foreground-icon">
+  <img src="${esc(p.iconData)}" alt="" class="lib-foreground-img">
+  <span class="card-foreground-fallback" style="display:none">${initials}</span>
+</div>`
+      : `<div class="card-foreground-icon"><span class="card-foreground-fallback">${initials}</span></div>`;
     const isCustom = p.format === 'custom';
     return `<div class="modpack-card" data-id="${esc(p.id)}">
 <div class="card-banner">${bannerContent}
+${foregroundIcon}
 <span class="card-badge ${badge}">${loaderName}</span>
 ${isCustom ? '<span class="card-badge" style="background:rgba(16,185,129,.2);color:var(--green);border-color:rgba(16,185,129,.3);right:auto;left:8px">'+t('badge.custom')+'</span>' : ''}
 <button class="card-del" data-del="${esc(p.id)}"><svg viewBox="0 0 14 14" fill="none"><path d="M2 3.5h10M5 3.5V2.5h4v1M3 3.5l.8 8h6.4l.8-8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
@@ -135,6 +144,13 @@ ${p.failedMods>0?`<div class="card-meta-item" style="color:var(--orange)">⚠ ${
   }).join('');
   grid.querySelectorAll('.lib-banner-img').forEach(img=>{
     img.addEventListener('error',()=>{img.style.display='none';},{once:true});
+  });
+  grid.querySelectorAll('.lib-foreground-img').forEach(img=>{
+    img.addEventListener('error',()=>{
+      img.style.display='none';
+      const fb=img.parentElement?.querySelector('.card-foreground-fallback');
+      if(fb)fb.style.display='flex';
+    },{once:true});
   });
   grid.querySelectorAll('[data-play]').forEach(btn=>{btn.addEventListener('click',e=>{e.stopPropagation();const pack=allPacks.find(p=>p.id===btn.dataset.play);if(pack)openPlayPanel(pack);});});
   grid.querySelectorAll('[data-del]').forEach(btn=>{btn.addEventListener('click',e=>{e.stopPropagation();const pack=allPacks.find(p=>p.id===btn.dataset.del);if(pack)deleteModpack(pack);});});
@@ -588,9 +604,17 @@ async function openPackPage(pack) {
   // Settings tab pre-fill
   $('pack-custom-name').value = pack.customName || '';
   $('pack-notes').value = pack.notes || '';
+  const packRamMax = _systemRamGB > 0 ? Math.max(1, Math.floor(_systemRamGB)) : 32;
+  $('pack-ram').max = packRamMax;
   const packRam = pack.ram || 0;
-  $('pack-ram').value = packRam;
-  $('pack-ram-val').textContent = packRam > 0 ? packRam + ' GB' : t('pack.settings.ram_global');
+  const safePackRam = Math.max(0, Math.min(packRam, packRamMax));
+  $('pack-ram').value = safePackRam;
+  $('pack-ram-val').textContent = safePackRam > 0 ? safePackRam + ' GB' : t('pack.settings.ram_global');
+  const packRamSystemInfo = $('pack-ram-system-info');
+  if (packRamSystemInfo && _systemRamGB) {
+    packRamSystemInfo.textContent = t('pack.settings.ram_system', { n: _systemRamGB });
+  }
+  updatePackRamWarning(safePackRam);
   updatePackIconPreview(pack);
 
   // Load log files list
@@ -844,8 +868,37 @@ $('pack-log-clear').addEventListener('click', () => {
 });
 
 // ── Settings tab ──────────────────────────────────────────────────────────────
+function updatePackRamWarning(ramGB) {
+  const warn = $('pack-ram-warning');
+  if (!warn) return;
+  if (!_systemRamGB || _systemRamGB === 0) { warn.style.display = 'none'; return; }
+  if (!ramGB || ramGB <= 0) { warn.style.display = 'none'; return; }
+  const ratio = ramGB / _systemRamGB;
+  const leftGB = (_systemRamGB - ramGB).toFixed(1);
+  if (ratio >= 0.9) {
+    warn.style.display = 'block';
+    warn.style.background = 'rgba(244,63,94,.1)';
+    warn.style.borderColor = 'rgba(244,63,94,.4)';
+    warn.style.color = 'var(--red)';
+    warn.textContent = t('pack.settings.ram_warning_high', { left: leftGB });
+  } else if (ratio >= 0.75) {
+    warn.style.display = 'block';
+    warn.style.background = 'rgba(245,158,11,.1)';
+    warn.style.borderColor = 'rgba(245,158,11,.3)';
+    warn.style.color = 'var(--orange)';
+    warn.textContent = t('pack.settings.ram_warning_medium', { left: leftGB });
+  } else {
+    warn.style.display = 'none';
+  }
+}
+
 $('pack-ram').addEventListener('input', function() {
-  $('pack-ram-val').textContent = parseInt(this.value) > 0 ? this.value + ' GB' : t('pack.settings.ram_global');
+  const max = parseInt(this.max, 10) || 32;
+  const raw = parseInt(this.value, 10) || 0;
+  const safe = Math.max(0, Math.min(raw, max));
+  if (safe !== raw) this.value = String(safe);
+  $('pack-ram-val').textContent = safe > 0 ? safe + ' GB' : t('pack.settings.ram_global');
+  updatePackRamWarning(safe);
 });
 
 let packIconDataPending = null;
@@ -888,7 +941,11 @@ $('pack-save-settings').addEventListener('click', async function() {
   const fields = {
     customName: $('pack-custom-name').value.trim() || null,
     notes:      $('pack-notes').value.trim(),
-    ram:        parseInt($('pack-ram').value) || 0,
+    ram:        (() => {
+      const max = parseInt($('pack-ram').max, 10) || 32;
+      const value = parseInt($('pack-ram').value, 10) || 0;
+      return Math.max(0, Math.min(value, max));
+    })(),
     iconData:   packIconDataPending !== null ? packIconDataPending : packPagePack.iconData,
   };
 
@@ -1016,6 +1073,8 @@ async function loadSettings(){
   // ── i18n: init language from saved config ──────────────────────────────────
   if(window.i18n){
     await window.i18n.initI18n(cfg);
+    // lib-count is dynamic; i18n static pass sets "lib.loading", so re-render library values after init.
+    renderLibrary(allPacks);
     // Reflect saved language on the selector buttons
     const lang=window.i18n.getLang();
     document.querySelectorAll('.lang-btn').forEach(b=>{
@@ -1034,6 +1093,12 @@ async function loadSettings(){
     const maxSlider = Math.max(4, Math.floor(_systemRamGB));
     $('inp-ram').max = maxSlider;
     $('ram-system-info').textContent = t('settings.ram_system',{n:_systemRamGB});
+    const packRamInput = $('pack-ram');
+    if (packRamInput) {
+      packRamInput.max = Math.max(1, Math.floor(_systemRamGB));
+      const packRamSystemInfo = $('pack-ram-system-info');
+      if (packRamSystemInfo) packRamSystemInfo.textContent = t('pack.settings.ram_system', { n: _systemRamGB });
+    }
   } catch {}
 
   const savedRam = cfg.ram || 4;
@@ -1119,6 +1184,20 @@ document.querySelectorAll('.lang-btn').forEach(btn=>{
     updateRamWarning(parseInt($('inp-ram').value)||4);
     const ramSI=$('ram-system-info');
     if(ramSI&&_systemRamGB)ramSI.textContent=t('settings.ram_system',{n:_systemRamGB});
+    const packRamInput = $('pack-ram');
+    const packRamVal = $('pack-ram-val');
+    if (packRamInput && packRamVal) {
+      const max = _systemRamGB ? Math.max(1, Math.floor(_systemRamGB)) : (parseInt(packRamInput.max, 10) || 32);
+      packRamInput.max = max;
+      const safe = Math.max(0, Math.min(parseInt(packRamInput.value, 10) || 0, max));
+      packRamInput.value = String(safe);
+      packRamVal.textContent = safe > 0 ? safe + ' GB' : t('pack.settings.ram_global');
+      const packRamSystemInfo = $('pack-ram-system-info');
+      if (packRamSystemInfo && _systemRamGB) {
+        packRamSystemInfo.textContent = t('pack.settings.ram_system', { n: _systemRamGB });
+      }
+      updatePackRamWarning(safe);
+    }
     renderUpdateState(_lastUpdateState);
     // Re-run refreshAuth so acct-name/acct-status show correct translated strings
     refreshAuth();
@@ -1437,8 +1516,19 @@ const LOADER_COMPAT = {
   neoforge: ['forge', 'neoforge'],
 };
 
-function isVersionCompatible(entry, versionObj) {
-  if (!versionObj) return { ok: false, reason: t('inst_pick.version_unknown') };
+function isLoaderAgnosticType(projectType) {
+  const type = (projectType || '').toLowerCase();
+  return type === 'resourcepack' || type === 'resource_pack' || type === 'texturepack' ||
+    type === 'shader' || type === 'shaderpack' || type === 'datapack';
+}
+
+function isVersionCompatible(entry, versionObj, projectType) {
+  const loaderAgnostic = isLoaderAgnosticType(projectType);
+  if (!versionObj) {
+    return loaderAgnostic
+      ? { ok: true }
+      : { ok: false, reason: t('inst_pick.version_unknown') };
+  }
 
   const vMcVersions = versionObj.game_versions || [];
   const vLoaders    = versionObj.loaders || [];
@@ -1446,11 +1536,14 @@ function isVersionCompatible(entry, versionObj) {
   // MC version check
   const mcOk = !vMcVersions.length || vMcVersions.includes(entry.mcVersion);
 
-  // Loader check — shaders have no loader constraint in Modrinth (loaders=[])
-  const isShader = vLoaders.length === 0 || vLoaders.includes('iris') || vLoaders.includes('optifine');
-  const loaderOk = isShader ||
+  // Loader check only applies to mods/plugins. Resource packs, shaders and datapacks are loader-agnostic.
+  const entryLoader = (entry.modloader || '').toLowerCase();
+  const compatLoaders = LOADER_COMPAT[entryLoader] || (entryLoader ? [entryLoader] : []);
+  const isShaderLikeVersion = vLoaders.length === 0 || vLoaders.includes('iris') || vLoaders.includes('optifine');
+  const loaderOk = loaderAgnostic ||
+    isShaderLikeVersion ||
     !vLoaders.length ||
-    vLoaders.some(l => (LOADER_COMPAT[entry.modloader] || [entry.modloader]).includes(l));
+    vLoaders.some(l => compatLoaders.includes((l || '').toLowerCase()));
 
   if (!mcOk) return { ok: false, reason: t('inst_pick.require_mc',{versions:vMcVersions.slice(0,3).join(', ')}) };
   if (!loaderOk) return { ok: false, reason: t('inst_pick.require_loader',{loaders:vLoaders.join('/')}) };
@@ -1470,7 +1563,7 @@ async function handleContentDownload(btn, project, versionObj, projectType) {
   // Annotate each instance with compatibility
   const annotated = instances.map(inst => ({
     ...inst,
-    compat: isVersionCompatible(inst, versionObj),
+    compat: isVersionCompatible(inst, versionObj, projectType),
   }));
 
   const compatible   = annotated.filter(i => i.compat.ok);

@@ -102,9 +102,13 @@ a:hover{color:var(--violet)}
 .modpack-card{background:var(--bg1);border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden;cursor:pointer;transition:all .3s cubic-bezier(.2,.8,.2,1);position:relative;}
 .modpack-card:hover{border-color:var(--violet);transform:translateY(-6px);box-shadow:0 12px 40px rgba(0,0,0,.5),0 0 20px rgba(139,92,246,.2);}
 .card-banner{height:90px;background:linear-gradient(135deg,var(--bg2) 0%,#111827 100%);position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;}
-.card-banner::after{content:'';position:absolute;inset:0;background:linear-gradient(to bottom,transparent 20%,var(--bg1))}
-.card-banner img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.3}
+.card-banner::after{content:'';position:absolute;inset:0;background:linear-gradient(to bottom,transparent 20%,var(--bg1));z-index:1;pointer-events:none}
+.card-banner .lib-banner-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.3}
 .card-letter{font-size:48px;font-weight:800;opacity:.05;letter-spacing:-2px;background:linear-gradient(135deg,var(--cyan),var(--violet));-webkit-background-clip:text;-webkit-text-fill-color:transparent;transform:translateY(10px)}
+.card-foreground-icon{position:absolute;left:14px;bottom:10px;width:54px;height:54px;border-radius:12px;overflow:hidden;z-index:4;border:1px solid rgba(255,255,255,.22);background:rgba(2,6,23,.66);backdrop-filter:blur(6px);box-shadow:0 8px 18px rgba(0,0,0,.35);transition:transform .18s ease,box-shadow .18s ease;}
+.card-foreground-icon img{width:100%;height:100%;display:block;object-fit:cover}
+.card-foreground-fallback{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;color:var(--text0);letter-spacing:0}
+.modpack-card:hover .card-foreground-icon{transform:translateY(-2px) scale(1.02);box-shadow:0 10px 20px rgba(0,0,0,.42)}
 .card-badge{position:absolute;top:12px;right:12px;z-index:2;padding:4px 10px;border-radius:20px;font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;}
 .badge-forge{background:rgba(245,158,11,.15);color:var(--orange);border:1px solid rgba(245,158,11,.3)}
 .badge-fabric{background:rgba(34,211,238,.15);color:var(--cyan);border:1px solid rgba(34,211,238,.3)}
@@ -817,8 +821,9 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
         <div class="pp-settings-section">
           <div class="pp-settings-section-title" data-i18n="pack.settings.perf">Performance</div>
           <div class="form-group">
-            <label class="form-label"><span data-i18n="pack.settings.ram_label">RAM dédiée</span> — <span class="accent" id="pack-ram-val">Global</span></label>
+            <label class="form-label"><span data-i18n="pack.settings.ram_label">RAM dédiée</span> — <span class="accent" id="pack-ram-val">Global</span> <span id="pack-ram-system-info" style="font-size:11px;color:var(--text2);font-weight:400"></span></label>
             <input type="range" id="pack-ram" min="0" max="32" step="1" value="0"/>
+            <div id="pack-ram-warning" style="display:none;margin-top:10px;padding:10px 14px;border-radius:var(--r-sm);background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);color:var(--orange);font-size:12px;font-weight:600;line-height:1.5"></div>
             <div class="form-hint"><span data-i18n="pack.settings.ram_hint">0 = utiliser la valeur globale des</span>
               <button class="nav-btn btn-inline" data-page="settings" data-i18n="pack.settings.ram_hint2">paramètres.</button>
               <span data-i18n="pack.settings.ram_hint3">Sinon, définit une valeur spécifique pour ce modpack uniquement.</span></div>
