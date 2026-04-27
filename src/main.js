@@ -5,6 +5,7 @@ const path = require('path');
 const fs   = require('fs');
 const os   = require('os');
 const crypto = require('crypto');
+const { execFile } = require('child_process');
 
 const MicrosoftAuth    = require('./core/auth/microsoft');
 const ModpackParser    = require('./core/modpack/parser');
@@ -27,7 +28,7 @@ const store   = new Store();
 const auth    = new MicrosoftAuth(store);
 const library = new ModpackLibrary(store);
 store.set('__dataPath__', Store.BASE_DIR);
-const DISCORD_RPC_CLIENT_ID = '1498344540623470684'; // TODO: put your Discord Application ID here (digits only)
+const DISCORD_RPC_CLIENT_ID = '1498344540623470684';
 const DISCORD_RPC_LAUNCHER_ASSET_KEY = 'logo_bckg';
 
 // ── IPC security helpers ───────────────────────────────────────────────────────
@@ -122,7 +123,48 @@ function loadVanillaProfile(mcVersion) {
 
 let mainWindow = null;
 let discordPresence = null;
+let runningGameChild = null;
+let runningGamePackId = null;
 const isDev = process.argv.includes('--dev');
+
+function isGameRunning() {
+  return !!(runningGameChild && Number.isInteger(runningGameChild.pid) && runningGameChild.pid > 0);
+}
+
+function clearRunningGameState() {
+  runningGameChild = null;
+  runningGamePackId = null;
+}
+
+function killRunningGameProcess() {
+  if (!isGameRunning()) return Promise.resolve({ ok: false, error: 'Aucune instance en cours' });
+  const pid = runningGameChild.pid;
+
+  if (process.platform === 'win32') {
+    return new Promise((resolve) => {
+      execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, (err, stdout, stderr) => {
+        if (!err) return resolve({ ok: true, pid });
+        const out = `${stdout || ''}\n${stderr || ''}\n${err.message || ''}`.toLowerCase();
+        if (out.includes('not found') || out.includes('cannot find')) {
+          return resolve({ ok: true, pid });
+        }
+        return resolve({ ok: false, error: `Impossible d'arreter le processus (${pid}): ${err.message || 'taskkill failed'}` });
+      });
+    });
+  }
+
+  try {
+    process.kill(-pid, 'SIGKILL');
+    return Promise.resolve({ ok: true, pid });
+  } catch {
+    try {
+      process.kill(pid, 'SIGKILL');
+      return Promise.resolve({ ok: true, pid });
+    } catch (e) {
+      return Promise.resolve({ ok: false, error: `Impossible d'arreter le processus (${pid}): ${e.message}` });
+    }
+  }
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -909,6 +951,9 @@ ipcMain.handle('modpack:import', async (_, filePath) => {
 // ── Launch ────────────────────────────────────────────────────────────────────
 ipcMain.handle('game:launch', async (_, modpackId) => {
   try {
+    if (isGameRunning()) {
+      return { ok: false, error: 'Une instance est deja en cours. Arrete-la avant de relancer.' };
+    }
     const entry = library.get(modpackId);
     if (!entry) throw new Error('Modpack introuvable dans la bibliothèque');
 
@@ -938,11 +983,14 @@ ipcMain.handle('game:launch', async (_, modpackId) => {
     });
 
     library.updateLastPlayed(modpackId);
+    runningGameChild = child;
+    runningGamePackId = modpackId;
     discordPresence?.setInGame(entry);
     send('game:launched', { pid: child.pid });
     child.stdout.on('data', d => send('game:log', d.toString()));
     child.stderr.on('data', d => send('game:log', d.toString()));
     child.on('close', code => {
+      clearRunningGameState();
       discordPresence?.clearInGame();
       send('game:closed', { code });
     });
@@ -955,6 +1003,14 @@ ipcMain.handle('game:launch', async (_, modpackId) => {
 });
 
 // ── Instance creation ─────────────────────────────────────────────────────────
+
+ipcMain.handle('game:kill', async () => {
+  const activePackId = runningGamePackId;
+  const result = await killRunningGameProcess();
+  if (!result.ok) return result;
+  send('game:log', '[Paroxysm] Arret force demande...');
+  return { ok: true, pid: result.pid, packId: activePackId };
+});
 
 ipcMain.handle('instance:get-mc-versions', async () => {
   try {

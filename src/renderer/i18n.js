@@ -120,6 +120,8 @@ const TRANSLATIONS = {
 
     // Pack page — hero
     'pack.play':      'JOUER',
+    'pack.kill':      'KILL INSTANCE',
+    'pack.killing':   'ARRÊT...',
     'pack.play_verb': 'Jouer',
     'pack.back':      'Retour',
 
@@ -288,6 +290,7 @@ const TRANSLATIONS = {
     'status.online':  'En ligne',
     'status.offline': 'Hors-ligne',
     'status.minecraft_launched': '✓ Minecraft lancé (PID {{pid}})',
+    'status.kill_sent':          'Demande d\'arrêt envoyée...',
     'status.stopped_code':       'Arrêté (code {{code}})',
     'modal.error_prefix':        '❌',
     'error.generic':             'Erreur',
@@ -407,6 +410,8 @@ const TRANSLATIONS = {
 
     // Pack page — hero
     'pack.play':      'PLAY',
+    'pack.kill':      'KILL INSTANCE',
+    'pack.killing':   'STOPPING...',
     'pack.play_verb': 'Play',
     'pack.back':      'Back',
 
@@ -575,6 +580,7 @@ const TRANSLATIONS = {
     'status.online':  'Online',
     'status.offline': 'Offline',
     'status.minecraft_launched': '✓ Minecraft launched (PID {{pid}})',
+    'status.kill_sent':          'Stop request sent...',
     'status.stopped_code':       'Stopped (code {{code}})',
     'modal.error_prefix':        '❌',
     'error.generic':             'Error',

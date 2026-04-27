@@ -429,6 +429,7 @@ function copyDirSync(src, dest, rootDest) {
       copyDirSync(s, d, rootDest);
     } else if (entry.isFile()) {
       fs.copyFileSync(s, d);
+      try { fs.chmodSync(d, 0o666); } catch {}
     }
     // Silently skip symlinks (potential TOCTOU / escape vector)
   }

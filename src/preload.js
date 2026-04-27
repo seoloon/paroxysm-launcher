@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld('px', {
   },
   game: {
     launch: id => ipcRenderer.invoke('game:launch', id),
+    kill:  () => ipcRenderer.invoke('game:kill'),
   },
   shell: {
     open:         p   => ipcRenderer.invoke('shell:open', p),

@@ -5,6 +5,7 @@ const px=window.px;
 // i18n shortcut — window.i18n is loaded by i18n.js before this script
 const t=(key,vars)=>window.i18n?window.i18n.t(key,vars):key;
 let allPacks=[],currentPack=null,isInstalling=false,isGameRunning=false,gameLogCb=null,gameCloseCb=null;
+let runningGamePackId=null,runningGamePid=null;
 
 function $(id){return document.getElementById(id);}
 function esc(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -82,6 +83,51 @@ function notify(message,type='info',timeout=3400){
   setTimeout(dismiss,Math.max(1400,timeout|0));
 }
 function notifyError(error){notify(t('error.generic')+': '+(error||t('error.unknown')),'error',4800);}
+
+function playMainIdleHtml(){
+  return '<svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M8 5v14l11-7z"/></svg> '+t('pack.play');
+}
+function playPackIdleHtml(){
+  return '<svg viewBox="0 0 20 20" fill="currentColor" width="18" height="18"><path d="M6 4l12 6-12 6z"/></svg> '+t('pack.play');
+}
+function setKillButtonState(btnId, visible, disabled = false, labelKey = 'pack.kill'){
+  const btn=$(btnId);
+  if(!btn)return;
+  btn.style.display=visible?'inline-flex':'none';
+  btn.disabled=disabled;
+  const label=btn.querySelector('span');
+  if(label)label.textContent=t(labelKey);
+}
+function syncPlayPanelControls(){
+  const playBtn=$('btn-play');
+  if(!playBtn)return;
+  if(runningGamePackId){
+    isGameRunning=true;
+    playBtn.disabled=true;
+    playBtn.innerHTML='● '+t('status.running');
+    setKillButtonState('btn-kill', true, false, 'pack.kill');
+  }else{
+    isGameRunning=false;
+    playBtn.disabled=false;
+    playBtn.innerHTML=playMainIdleHtml();
+    setKillButtonState('btn-kill', false, false, 'pack.kill');
+  }
+}
+function syncPackHeroControls(){
+  const playBtn=$('pack-play-hero');
+  if(!playBtn)return;
+  if(runningGamePackId){
+    packIsRunning=true;
+    playBtn.disabled=true;
+    playBtn.innerHTML='● '+t('status.running');
+    setKillButtonState('pack-kill-hero', true, false, 'pack.kill');
+  }else{
+    packIsRunning=false;
+    playBtn.disabled=false;
+    playBtn.innerHTML=playPackIdleHtml();
+    setKillButtonState('pack-kill-hero', false, false, 'pack.kill');
+  }
+}
 
 // Window controls
 $('btn-min').addEventListener('click',()=>px.win.minimize());
@@ -209,10 +255,17 @@ function openPlayPanel(pack){
   $('pp-loader').textContent=formatLoaderWithVersion(pack.modloader,pack.modloaderVersion);
   $('pp-mods').textContent=pack.totalMods+(pack.failedMods>0?' (⚠ '+pack.failedMods+')':'');
   $('pp-played').textContent=pack.lastPlayed?new Date(pack.lastPlayed).toLocaleDateString():t('pack.never_played');
-  $('game-status-box').style.display='none';
+  const statusBox=$('game-status-box');
+  statusBox.style.display='none';
   const logEl=$('game-log');logEl.style.display='none';logEl.innerHTML='';
-  const btn=$('btn-play');btn.disabled=false;
-  btn.innerHTML='<svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M8 5v14l11-7z"/></svg> '+t('pack.play');
+  syncPlayPanelControls();
+  if(runningGamePackId){
+    statusBox.style.display='block';
+    statusBox.style.background='var(--green-bg)';
+    statusBox.style.color='var(--green)';
+    statusBox.style.border='1px solid rgba(16,185,129,.3)';
+    statusBox.textContent=t('status.minecraft_launched',{pid:runningGamePid||'?'});
+  }
   // Toujours démarrer sur l'onglet Jouer
   ppSwitchTab('play');
   // Charger les fichiers en arrière-plan pour l'onglet Contenu
@@ -514,18 +567,58 @@ $('btn-play').addEventListener('click',async function(){
   const btn=this;btn.disabled=true;btn.textContent=t('auth.logging_in');
   const result=await px.game.launch(currentPack.id);
   if(!result.ok){
-    btn.disabled=false;btn.innerHTML='<svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M8 5v14l11-7z"/></svg> '+t('pack.play');
+    syncPlayPanelControls();
     const sb=$('game-status-box');sb.style.display='block';sb.style.background='var(--red-bg)';sb.style.color='var(--red)';sb.style.border='1px solid rgba(244,63,94,.3)';sb.textContent=t('modal.error_prefix')+' '+result.error;return;
   }
   isGameRunning=true;btn.disabled=false;btn.innerHTML='● '+t('status.running');
+  runningGamePackId=currentPack.id;
+  runningGamePid=result.pid||null;
+  syncPlayPanelControls();
+  syncPackHeroControls();
   const sb=$('game-status-box');sb.style.display='block';sb.style.background='var(--green-bg)';sb.style.color='var(--green)';sb.style.border='1px solid rgba(16,185,129,.3)';sb.textContent=t('status.minecraft_launched',{pid:result.pid});
   const logEl=$('game-log');logEl.style.display='block';
   gameLogCb=data=>{const l=document.createElement('div');l.textContent=data.replace(/\n$/,'');logEl.appendChild(l);if(logEl.children.length>500)logEl.removeChild(logEl.firstChild);logEl.scrollTop=logEl.scrollHeight;};
-  gameCloseCb=({code})=>{isGameRunning=false;if(gameLogCb){px.off('game:log',gameLogCb);gameLogCb=null;}if(gameCloseCb){px.off('game:closed',gameCloseCb);gameCloseCb=null;}btn.innerHTML='<svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M8 5v14l11-7z"/></svg> '+t('pack.play');btn.disabled=false;const s=$('game-status-box');if(s);loadLibrary();};
+  gameCloseCb=({code})=>{
+    isGameRunning=false;
+    runningGamePackId=null;
+    runningGamePid=null;
+    if(gameLogCb){px.off('game:log',gameLogCb);gameLogCb=null;}
+    if(gameCloseCb){px.off('game:closed',gameCloseCb);gameCloseCb=null;}
+    syncPlayPanelControls();
+    syncPackHeroControls();
+    const s=$('game-status-box');
+    if(s){
+      s.style.display='block';
+      s.style.background='var(--bg2)';
+      s.style.color='var(--text1)';
+      s.style.border='1px solid var(--border)';
+      s.textContent=t('status.stopped_code',{code});
+    }
+    loadLibrary();
+  };
   px.on('game:log',gameLogCb);px.on('game:closed',gameCloseCb);
 });
 
 // ── Pack Page ────────────────────────────────────────────────────────────────
+$('btn-kill').addEventListener('click',async function(){
+  if(!runningGamePackId)return;
+  setKillButtonState('btn-kill',true,true,'pack.killing');
+  setKillButtonState('pack-kill-hero',!!runningGamePackId,true,'pack.killing');
+  const result=await px.game.kill();
+  if(!result?.ok){
+    setKillButtonState('btn-kill',true,false,'pack.kill');
+    setKillButtonState('pack-kill-hero',!!runningGamePackId,false,'pack.kill');
+    notifyError(result?.error||t('error.unknown'));
+    return;
+  }
+  const sb=$('game-status-box');
+  sb.style.display='block';
+  sb.style.background='rgba(245,158,11,.1)';
+  sb.style.color='var(--orange)';
+  sb.style.border='1px solid rgba(245,158,11,.35)';
+  sb.textContent=t('status.kill_sent');
+});
+
 let packPagePack = null;
 let packPageFilter = 'all';
 let packPageFiles = [];
@@ -539,7 +632,7 @@ const TYPE_LABELS_PP = {mod:'MOD',shader:'SHD',resourcepack:'RES',config:'CFG',o
 
 async function openPackPage(pack) {
   packPagePack = pack;
-  packIsRunning = false;
+  packIsRunning = !!runningGamePackId;
   packPageFilter = 'all';
 
   // Navigate tabs to first
@@ -583,9 +676,14 @@ async function openPackPage(pack) {
   sb.style.display = 'none';
   const gl = $('pack-game-log');
   gl.style.display = 'none'; gl.innerHTML = '';
-  const btn = $('pack-play-hero');
-  btn.disabled = false;
-  btn.innerHTML = '<svg viewBox="0 0 20 20" fill="currentColor" width="18" height="18"><path d="M6 4l12 6-12 6z"/></svg> '+t('pack.play');
+  syncPackHeroControls();
+  if(runningGamePackId){
+    sb.style.display='block';
+    sb.style.background='var(--green-bg)';
+    sb.style.color='var(--green)';
+    sb.style.borderColor='rgba(16,185,129,.3)';
+    sb.textContent=t('status.minecraft_launched',{pid:runningGamePid||'?'});
+  }
 
   // Load content files
   packPageFiles = [];
@@ -655,8 +753,7 @@ $('pack-play-hero').addEventListener('click', async function() {
 
   const result = await px.game.launch(packPagePack.id);
   if (!result.ok) {
-    btn.disabled = false;
-    btn.innerHTML = '<svg viewBox="0 0 20 20" fill="currentColor" width="18" height="18"><path d="M6 4l12 6-12 6z"/></svg> '+t('pack.play');
+    syncPackHeroControls();
     const sb = $('pack-status-box');
     sb.style.display = 'block'; sb.style.background = 'var(--red-bg)';
     sb.style.color = 'var(--red)'; sb.style.borderColor = 'rgba(244,63,94,.3)';
@@ -664,8 +761,11 @@ $('pack-play-hero').addEventListener('click', async function() {
     return;
   }
 
+  runningGamePackId = packPagePack.id;
+  runningGamePid = result.pid || null;
   packIsRunning = true;
-  btn.disabled = false; btn.innerHTML = '● '+t('status.running');
+  syncPlayPanelControls();
+  syncPackHeroControls();
   const sb = $('pack-status-box');
   sb.style.display = 'block'; sb.style.background = 'var(--green-bg)';
   sb.style.color = 'var(--green)'; sb.style.borderColor = 'rgba(16,185,129,.3)';
@@ -692,10 +792,12 @@ $('pack-play-hero').addEventListener('click', async function() {
 
   packGameCloseCb = ({ code }) => {
     packIsRunning = false;
+    runningGamePackId = null;
+    runningGamePid = null;
     if (packGameLogCb) { px.off('game:log', packGameLogCb); packGameLogCb = null; }
     if (packGameCloseCb) { px.off('game:closed', packGameCloseCb); packGameCloseCb = null; }
-    btn.innerHTML = '<svg viewBox="0 0 20 20" fill="currentColor" width="18" height="18"><path d="M6 4l12 6-12 6z"/></svg> '+t('pack.play');
-    btn.disabled = false;
+    syncPackHeroControls();
+    syncPlayPanelControls();
     sb.textContent = t('status.stopped_code',{code});
     loadLibrary();
     // Reload log files list after game closes
@@ -707,6 +809,25 @@ $('pack-play-hero').addEventListener('click', async function() {
 });
 
 // ── Content tab ───────────────────────────────────────────────────────────────
+$('pack-kill-hero').addEventListener('click', async function() {
+  if (!runningGamePackId) return;
+  setKillButtonState('pack-kill-hero', true, true, 'pack.killing');
+  setKillButtonState('btn-kill', true, true, 'pack.killing');
+  const result = await px.game.kill();
+  if (!result?.ok) {
+    setKillButtonState('pack-kill-hero', true, false, 'pack.kill');
+    setKillButtonState('btn-kill', !!runningGamePackId, false, 'pack.kill');
+    notifyError(result?.error || t('error.unknown'));
+    return;
+  }
+  const sb = $('pack-status-box');
+  sb.style.display = 'block';
+  sb.style.background = 'rgba(245,158,11,.1)';
+  sb.style.color = 'var(--orange)';
+  sb.style.borderColor = 'rgba(245,158,11,.35)';
+  sb.textContent = t('status.kill_sent');
+});
+
 document.querySelectorAll('[data-packfilter]').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('[data-packfilter]').forEach(b => b.classList.remove('active'));
