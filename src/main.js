@@ -20,9 +20,7 @@ const GameLauncher     = require('./core/runtime/launcher');
 const DiscordRpcService = require('./core/integrations/discordRpc');
 const Store            = require('./core/utils/store');
 let autoUpdater = null;
-try {
-  ({ autoUpdater } = require('electron-updater'));
-} catch {}
+let autoUpdaterLoadError = null;
 
 const store   = new Store();
 const auth    = new MicrosoftAuth(store);
@@ -320,23 +318,34 @@ function bindAutoUpdaterEvents() {
 }
 
 function setupAutoUpdater() {
-  if (!autoUpdater) {
-    updaterReady = false;
-    setUpdaterState({
-      available: false,
-      enabled: false,
-      status: 'disabled',
-      message: 'Auto-update unavailable (electron-updater missing).',
-    });
-    return;
-  }
   if (!app.isPackaged) {
     updaterReady = false;
     setUpdaterState({
       available: false,
       enabled: false,
       status: 'disabled',
-      message: 'Auto-update disabled in development mode.',
+      message: 'development mode.',
+    });
+    return;
+  }
+
+  if (!autoUpdater) {
+    try {
+      ({ autoUpdater } = require('electron-updater'));
+      autoUpdaterLoadError = null;
+    } catch (e) {
+      autoUpdaterLoadError = e;
+    }
+  }
+
+  if (!autoUpdater) {
+    updaterReady = false;
+    const loadErr = autoUpdaterLoadError?.message ? ` (${autoUpdaterLoadError.message})` : '';
+    setUpdaterState({
+      available: false,
+      enabled: false,
+      status: 'disabled',
+      message: `electron-updater missing.${loadErr}`,
     });
     return;
   }

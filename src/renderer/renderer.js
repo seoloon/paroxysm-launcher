@@ -1150,6 +1150,30 @@ $('btn-logout').addEventListener('click',async function(){if(!confirm(t('auth.lo
 let _systemRamGB = 0;
 let _lastUpdateState = null;
 
+function getUpdateDisabledReasonMessage(message){
+  const msg = String(message || '').trim();
+  if (!msg) return t('error.unknown');
+
+  const lower = msg.toLowerCase();
+  if (lower.includes('electron-updater missing')) {
+    return t('settings.update_reason_missing_module');
+  }
+  if (lower.includes('development mode')) {
+    return t('settings.update_reason_dev_mode');
+  }
+
+  if (lower.startsWith('auto-update unavailable:')) {
+    const cleaned = msg.replace(/^auto-update unavailable:\s*/i, '').trim();
+    return cleaned || t('error.unknown');
+  }
+  if (lower.startsWith('auto-update unavailable')) {
+    const match = msg.match(/\(([^)]+)\)/);
+    if (match?.[1]) return match[1].trim();
+  }
+
+  return msg;
+}
+
 function renderUpdateState(state){
   const statusEl = $('update-status');
   const checkBtn = $('btn-check-updates');
@@ -1170,7 +1194,7 @@ function renderUpdateState(state){
   installBtn.disabled = st.status !== 'downloaded';
 
   if (!available) {
-    statusEl.textContent = t('settings.update_status_disabled', { message: st.message || t('error.unknown') });
+    statusEl.textContent = t('settings.update_status_disabled', { message: getUpdateDisabledReasonMessage(st.message) });
     return;
   }
 
