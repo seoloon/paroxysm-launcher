@@ -67,6 +67,9 @@ contextBridge.exposeInMainWorld('px', {
     check:      () => ipcRenderer.invoke('updates:check'),
     installNow: () => ipcRenderer.invoke('updates:install-now'),
   },
+  rpc: {
+    setPage: page => ipcRenderer.invoke('rpc:set-page', page),
+  },
   system: {
     ram: () => ipcRenderer.invoke('system:ram'),
   },

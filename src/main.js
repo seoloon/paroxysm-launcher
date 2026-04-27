@@ -16,6 +16,7 @@ const ForgeManager     = require('./core/runtime/forge');
 const NeoForgeManager  = require('./core/runtime/neoforge');
 const FabricManager    = require('./core/runtime/fabric');
 const GameLauncher     = require('./core/runtime/launcher');
+const DiscordRpcService = require('./core/integrations/discordRpc');
 const Store            = require('./core/utils/store');
 let autoUpdater = null;
 try {
@@ -26,6 +27,8 @@ const store   = new Store();
 const auth    = new MicrosoftAuth(store);
 const library = new ModpackLibrary(store);
 store.set('__dataPath__', Store.BASE_DIR);
+const DISCORD_RPC_CLIENT_ID = '1498344540623470684'; // TODO: put your Discord Application ID here (digits only)
+const DISCORD_RPC_LAUNCHER_ASSET_KEY = 'logo_bckg';
 
 // ── IPC security helpers ───────────────────────────────────────────────────────
 /**
@@ -118,6 +121,7 @@ function loadVanillaProfile(mcVersion) {
 }
 
 let mainWindow = null;
+let discordPresence = null;
 const isDev = process.argv.includes('--dev');
 
 function createWindow() {
@@ -147,9 +151,31 @@ function createWindow() {
 app.whenReady().then(() => {
   createWindow();
   setupAutoUpdater();
+  discordPresence = new DiscordRpcService(
+    () => sanitizeSettings(store.get('settings'), store.get('settings')),
+    {
+      clientId: DISCORD_RPC_CLIENT_ID,
+      launcherAssetKey: DISCORD_RPC_LAUNCHER_ASSET_KEY,
+    }
+  );
+
+  discordPresence.start();
+  discordPresence.setPage('library');
 });
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+app.on('window-all-closed', () => {
+  try { discordPresence?.stop(); } catch {}
+  if (process.platform !== 'darwin') app.quit();
+});
 app.on('activate', () => { if (!mainWindow) createWindow(); });
+app.on('before-quit', () => {
+  try { discordPresence?.stop(); } catch {}
+});
+app.on('will-quit', () => {
+  try { discordPresence?.stop(); } catch {}
+});
+app.on('quit', () => {
+  try { discordPresence?.stop(); } catch {}
+});
 
 const send = (ch, data) => mainWindow?.webContents?.send(ch, data);
 
@@ -350,6 +376,7 @@ ipcMain.handle('config:set', (_, key, value) => {
   const current = sanitizeSettings(store.get('settings'), store.get('settings'));
   const safe = sanitizeSettings(value, current);
   store.set('settings', safe);
+  discordPresence?.refreshSettings();
   if (updaterReady && current.updateChannel !== safe.updateChannel) {
     applyUpdateChannel(safe.updateChannel);
     setUpdaterState({
@@ -365,6 +392,11 @@ ipcMain.handle('app:version', () => app.getVersion());
 ipcMain.handle('updates:get-state', () => updaterState);
 ipcMain.handle('updates:check', async () => checkForUpdates('manual'));
 ipcMain.handle('updates:install-now', () => installDownloadedUpdateNow());
+ipcMain.handle('rpc:set-page', (_, page) => {
+  if (typeof page !== 'string') return false;
+  discordPresence?.setPage(page);
+  return true;
+});
 
 // ── System info ───────────────────────────────────────────────────────────────
 ipcMain.handle('system:ram', () => {
@@ -485,10 +517,17 @@ ipcMain.handle('modpack:resolve-names', async (_, packId) => {
 
     const modsDir     = path.join(entry.gameDir, 'mods');
     const manifestPath = path.join(entry.gameDir, 'mods-manifest.json');
+    const cachePath = path.join(Store.BASE_DIR, 'cache', 'curseforge-names.json');
     let manifest = {};
+    let cache = {};
+    let cacheDirty = false;
     try {
       if (fs.existsSync(manifestPath))
         manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    } catch {}
+    try {
+      if (fs.existsSync(cachePath))
+        cache = JSON.parse(fs.readFileSync(cachePath, 'utf8')) || {};
     } catch {}
 
     if (!fs.existsSync(modsDir)) return { ok: true, resolved: 0 };
@@ -508,15 +547,40 @@ ipcMain.handle('modpack:resolve-names', async (_, packId) => {
         const m = filename.match(numericPattern);
         if (!m) return;
         const [, projectID, fileID] = m;
+        const cacheKey = String(projectID);
+
+        if (cache[cacheKey]) {
+          manifest[filename] = { displayName: cache[cacheKey], projectID: +projectID, fileID: +fileID };
+          resolved++;
+          return;
+        }
         try {
           const res = await fetch(`https://www.curseforge.com/api/v1/mods/${projectID}`, {
             headers: HEADERS, timeout: 8000
           });
-          if (!res.ok) return;
-          const data = await res.json();
-          const name = data?.data?.name || data?.name;
+          let name = '';
+          if (res.ok) {
+            const data = await res.json();
+            name = data?.data?.name || data?.name || '';
+          }
+
+          if (!name) {
+            try {
+              const fileRes = await fetch(`https://www.curseforge.com/api/v1/mods/${projectID}/files/${fileID}`, {
+                headers: HEADERS, timeout: 8000
+              });
+              if (fileRes.ok) {
+                const fileData = await fileRes.json();
+                const raw = fileData?.data?.displayName || fileData?.data?.fileName || fileData?.displayName || fileData?.fileName;
+                name = String(raw || '').replace(/\.(jar|zip)$/i, '').replace(/[_-]+/g, ' ').trim();
+              }
+            } catch {}
+          }
+
           if (name) {
             manifest[filename] = { displayName: name, projectID: +projectID, fileID: +fileID };
+            cache[cacheKey] = name;
+            cacheDirty = true;
             resolved++;
           }
         } catch {}
@@ -525,6 +589,12 @@ ipcMain.handle('modpack:resolve-names', async (_, packId) => {
     }
 
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    if (cacheDirty) {
+      try {
+        fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+        fs.writeFileSync(cachePath, JSON.stringify(cache, null, 2));
+      } catch {}
+    }
     return { ok: true, resolved };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -648,7 +718,11 @@ ipcMain.handle('auth:logout', () => { auth.logout(); return true; });
 ipcMain.handle('library:list',   ()      => library.list());
 ipcMain.handle('library:get',    (_, id) => library.get(id));
 ipcMain.handle('library:delete', (_, id) => library.delete(id));
-ipcMain.handle('library:update', (_, id, fields) => library.update(id, fields));
+ipcMain.handle('library:update', (_, id, fields) => {
+  const updated = library.update(id, fields);
+  if (updated) discordPresence?.syncRunningPack(updated);
+  return updated;
+});
 
 // ── Per-instance logs ─────────────────────────────────────────────────────────
 ipcMain.handle('modpack:get-logs', (_, packId) => {
@@ -864,10 +938,14 @@ ipcMain.handle('game:launch', async (_, modpackId) => {
     });
 
     library.updateLastPlayed(modpackId);
+    discordPresence?.setInGame(entry);
     send('game:launched', { pid: child.pid });
     child.stdout.on('data', d => send('game:log', d.toString()));
     child.stderr.on('data', d => send('game:log', d.toString()));
-    child.on('close', code => send('game:closed', { code }));
+    child.on('close', code => {
+      discordPresence?.clearInGame();
+      send('game:closed', { code });
+    });
 
     return { ok: true, pid: child.pid };
   } catch (e) {
@@ -904,13 +982,45 @@ ipcMain.handle('instance:get-loader-versions', async (_, { loader, mcVersion }) 
       return await NeoForgeManager.getVersionsForMc(mcVersion);
     }
     if (loader === 'forge') {
-      const xml = await fetchXML('https://files.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml');
-      const all = parseXMLVersions(xml);
-      return all.filter(v => v.startsWith(mcVersion + '-')).map(v => v.replace(mcVersion + '-', '')).reverse();
+      return await getForgeVersionsForMc(mcVersion);
     }
     return [];
   } catch(e) { return { error: e.message }; }
 });
+
+async function getForgeVersionsForMc(mcVersion) {
+  const metadataUrls = [
+    'https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml',
+    'https://files.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml',
+  ];
+  const prefix = `${mcVersion}-`;
+  let lastError = null;
+
+  for (const url of metadataUrls) {
+    try {
+      const xml = await fetchXML(url);
+      const all = parseXMLVersions(xml);
+      if (!all.length) throw new Error(`No <version> entries from ${url}`);
+
+      const versions = [...new Set(
+        all
+          .filter(v => v.startsWith(prefix))
+          .map(v => v.slice(prefix.length))
+          .filter(Boolean)
+      )];
+
+      versions.sort((a, b) => b.localeCompare(a, undefined, { numeric: true, sensitivity: 'base' }));
+      if (versions.length) return versions;
+    } catch (e) {
+      lastError = e;
+    }
+  }
+
+  if (lastError) {
+    console.warn('[instance:get-loader-versions][forge] Unable to resolve versions:', lastError.message);
+  }
+  return [];
+}
 
 async function fetchXML(url) {
   const https = require('follow-redirects').https;
@@ -919,6 +1029,10 @@ async function fetchXML(url) {
       headers: { 'User-Agent': 'PaROXYSM-Launcher/1.0' },
       maxRedirects: 10, timeout: 20000,
     }, res => {
+      if ((res.statusCode || 0) >= 400) {
+        res.resume();
+        return reject(new Error(`HTTP ${res.statusCode} — ${url}`));
+      }
       let data = '';
       res.on('data', d => { data += d; });
       res.on('end', () => resolve(data));

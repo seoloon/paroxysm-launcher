@@ -15,6 +15,7 @@
     "build:all": "npm run check && electron-builder --win --linux --mac --publish never"
   },
   "dependencies": {
+    "discord-rpc": "^4.0.1",
     "electron-store": "^8.1.0",
     "electron-updater": "^6.6.2",
     "extract-zip": "^2.0.1",
@@ -29,17 +30,42 @@
     "appId": "dev.paroxysm.launcher",
     "productName": "Paroxysm Launcher",
     "copyright": "Copyright © 2026 Seoloon",
-    "directories": { "output": "dist", "buildResources": "build" },
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "assets/icon.ico"
     },
     "linux": {
-      "target": [{ "target": "AppImage", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "assets/icon.png"
     },
     "mac": {
-      "target": [{ "target": "dmg", "arch": ["x64", "arm64"] }],
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
       "icon": "assets/icon.icns"
     },
     "nsis": {
@@ -59,6 +85,9 @@
         "repo": "paroxysm-launcher"
       }
     ],
-    "files": ["src/**/*", "assets/**/*"]
+    "files": [
+      "src/**/*",
+      "assets/**/*"
+    ]
   }
 }

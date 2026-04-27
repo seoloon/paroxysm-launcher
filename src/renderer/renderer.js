@@ -1144,7 +1144,14 @@ $('inp-ram').addEventListener('input',function(){
 async function saveAllSettings(){
   const lang=window.i18n?window.i18n.getLang():'fr';
   const updateChannel = $('inp-update-channel')?.value === 'beta' ? 'beta' : 'stable';
-  await px.config.set('settings',{ram:parseInt($('inp-ram').value),username:$('inp-username').value.trim(),forceOffline:$('inp-force-offline').checked,cfApiKey:$('inp-cf-key').value.trim(),language:lang,updateChannel});
+  await px.config.set('settings',{
+    ram:parseInt($('inp-ram').value),
+    username:$('inp-username').value.trim(),
+    forceOffline:$('inp-force-offline').checked,
+    cfApiKey:$('inp-cf-key').value.trim(),
+    language:lang,
+    updateChannel,
+  });
   document.querySelectorAll('.save-confirm').forEach(c=>{c.style.display='inline';setTimeout(()=>{c.style.display='none';},2000);});
 }
 $('btn-save-settings').addEventListener('click',saveAllSettings);
@@ -1833,7 +1840,15 @@ $('ci-create').addEventListener('click', async () => {
 });
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
-async function boot(){await refreshAuth();await loadLibrary();await loadSettings();await loadDataPath();await loadMrVersions();mrSearch();}
+async function boot(){
+  await refreshAuth();
+  await loadLibrary();
+  await loadSettings();
+  await loadDataPath();
+  await loadMrVersions();
+  mrSearch();
+  px.rpc?.setPage?.('library').catch?.(()=>{});
+}
 boot().catch(e=>console.error('[boot]',e));
 
 })();
