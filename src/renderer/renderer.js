@@ -11,7 +11,12 @@ function $(id){return document.getElementById(id);}
 function esc(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function fmt(n){if(!n)return'0';if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(1)+'k';return String(n);}
 function getLoaderDisplayName(loader){
-  return ({forge:'Forge',neoforge:'NeoForge',fabric:'Fabric',quilt:'Quilt',vanilla:'Vanilla'})[loader]||loader;
+  const raw = String(loader || '');
+  const lower = raw.toLowerCase();
+  const mapped = ({forge:'Forge',neoforge:'NeoForge',fabric:'Fabric',quilt:'Quilt',vanilla:'Vanilla'})[lower];
+  if (mapped) return mapped;
+  if (!raw) return '';
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
 }
 function formatLoaderWithVersion(loader, version){
   const name=getLoaderDisplayName(loader);
@@ -1529,7 +1534,7 @@ async function openMrDetail(projectId){
     </select>
     ${loadersSorted.length>1?`<select id="mr-dv-loader" class="mr-select" style="font-size:11px;padding:5px 8px;min-width:90px">
       <option value="">${t('mr.filter.all_loaders')}</option>
-      ${loadersSorted.map(l=>`<option value="${esc(l)}"${l===detailDefaultLoader?' selected':''}>${esc(l)}</option>`).join('')}
+      ${loadersSorted.map(l=>`<option value="${esc(l)}"${l===detailDefaultLoader?' selected':''}>${esc(getLoaderDisplayName(l))}</option>`).join('')}
     </select>`:''}
   </div>
 </div>
@@ -1538,7 +1543,7 @@ ${allVersions.map(v=>`
 <div class="mr-version-item" data-mcv="${esc((v.game_versions||[]).join(','))}" data-loader="${esc((v.loaders||[]).join(','))}">
 <div class="mr-version-info">
 <div class="mr-version-name">${esc(v.name||v.version_number)} <span style="font-size:10px;padding:2px 7px;border-radius:10px;margin-left:6px;background:${v.version_type==='release'?'rgba(16,185,129,.15)':v.version_type==='beta'?'rgba(245,158,11,.15)':'rgba(139,92,246,.15)'};color:${v.version_type==='release'?'var(--green)':v.version_type==='beta'?'var(--orange)':'var(--violet)'}">${esc(v.version_type||'release')}</span></div>
-<div class="mr-version-meta">${(v.game_versions||[]).slice(0,4).join(', ')}${(v.game_versions||[]).length>4?'…':''} · ${esc(v.loaders?.join(', ')||'')}</div>
+<div class="mr-version-meta">${(v.game_versions||[]).slice(0,4).join(', ')}${(v.game_versions||[]).length>4?'…':''} · ${esc((v.loaders||[]).map(getLoaderDisplayName).join(', '))}</div>
 </div>
 <button class="mr-dl-btn" data-vid="${esc(v.id)}" data-pid="${esc(projectId)}" data-fname="${esc(v.files?.[0]?.filename||'download')}">
 <svg viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6l3 3 3-3" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 11h10" stroke-linecap="round"/></svg>
