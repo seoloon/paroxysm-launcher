@@ -27,6 +27,7 @@ const CF_WEB_DL      = 'https://www.curseforge.com/api/v1/mods';
 const CF_WEB_API     = 'https://www.curseforge.com/api/v1/mods';
 const INSTANCES_BASE = path.join(Store.BASE_DIR, 'instances');
 const MANIFEST_FILE  = 'mods-manifest.json';
+const CF_NAME_CACHE_FILE = path.join(Store.BASE_DIR, 'cache', 'curseforge-names.json');
 
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -41,6 +42,8 @@ class ModpackInstaller {
     this.modsDir      = path.join(this.gameDir, 'mods');
     this.manifestPath = path.join(this.gameDir, MANIFEST_FILE);
     this._manifest    = this._loadManifest();
+    this._cfNameCache = loadCurseNameCache();
+    this._cfNameCacheDirty = false;
   }
 
   _loadManifest() {
@@ -55,13 +58,28 @@ class ModpackInstaller {
     try {
       fs.mkdirSync(this.gameDir, { recursive: true });
       fs.writeFileSync(this.manifestPath, JSON.stringify(this._manifest, null, 2));
+      if (this._cfNameCacheDirty) {
+        saveCurseNameCache(this._cfNameCache);
+        this._cfNameCacheDirty = false;
+      }
     } catch (e) {
       console.warn('[installer] Failed to save manifest:', e.message);
     }
   }
 
   _addToManifest(filename, displayName, projectID, fileID) {
-    this._manifest[filename] = { displayName, projectID, fileID };
+    const normalized = normalizeDisplayName(displayName);
+    const existing = this._manifest[filename];
+    if (existing?.displayName) {
+      const oldScore = scoreDisplayName(existing.displayName);
+      const newScore = scoreDisplayName(normalized);
+      if (newScore < oldScore) return;
+    }
+    this._manifest[filename] = {
+      displayName: normalized || existing?.displayName || filename,
+      projectID: Number.isFinite(+projectID) ? +projectID : existing?.projectID,
+      fileID: Number.isFinite(+fileID) ? +fileID : existing?.fileID,
+    };
   }
 
   async downloadMods(onEach = () => {}) {
@@ -92,9 +110,18 @@ class ModpackInstaller {
 
       onEach(done, items.length, err ? `⚠ ${label} (${err.message})` : label);
 
-      if (!err && item.displayName) {
+      if (!err) {
         const filename = path.basename(item.dest);
-        this._addToManifest(filename, item.displayName, item.projectID, item.fileID);
+        const cachedProjectName = item.projectID != null ? this._cfNameCache[String(item.projectID)] : '';
+        const bestName = cachedProjectName || item.displayName || filename;
+        this._addToManifest(filename, bestName, item.projectID, item.fileID);
+
+        if (item.projectID != null && item.fileID != null) {
+          const numericAlias = `${item.projectID}-${item.fileID}.jar`;
+          if (filename !== numericAlias && this._manifest[numericAlias]) {
+            delete this._manifest[numericAlias];
+          }
+        }
       }
     });
 
@@ -127,13 +154,20 @@ class ModpackInstaller {
     for (const chunk of chunkArray(files, 5)) {
       await Promise.allSettled(chunk.map(async (f) => {
         try {
-          const res = await fetch(`${CF_WEB_API}/${f.projectID}`, { headers: HEADERS, timeout: 8000 });
-          if (!res.ok) return;
-          const data = await res.json();
-          const modName = data?.data?.name || data?.name;
+          const cacheKey = String(f.projectID);
+          const cachedName = this._cfNameCache[cacheKey];
+          if (cachedName) {
+            const filename = `${f.projectID}-${f.fileID}.jar`;
+            this._addToManifest(filename, cachedName, f.projectID, f.fileID);
+            return;
+          }
+
+          const modName = await fetchCurseProjectName(f.projectID, f.fileID);
           if (modName) {
             const filename = `${f.projectID}-${f.fileID}.jar`;
             this._addToManifest(filename, modName, f.projectID, f.fileID);
+            this._cfNameCache[cacheKey] = modName;
+            this._cfNameCacheDirty = true;
           }
         } catch {}
       }));
@@ -291,8 +325,9 @@ function buildWebEndpointItem(f, modsDir) {
     fileID:      f.fileID,
     url:         `${CF_WEB_DL}/${f.projectID}/files/${f.fileID}/download`,
     dest:        path.join(modsDir, `${f.projectID}-${f.fileID}.jar`),
-    displayName: `${f.projectID}-${f.fileID}.jar`,
+    displayName: null,
     headers:     HEADERS,
+    preferRemoteFilename: true,
     checkZip:    true,
   };
 }
@@ -311,6 +346,63 @@ function chunkArray(arr, n) {
   const out = [];
   for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
   return out;
+}
+
+function normalizeDisplayName(name) {
+  if (!name || typeof name !== 'string') return '';
+  return name
+    .replace(/\.(jar|zip)$/i, '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function scoreDisplayName(name) {
+  if (!name) return 0;
+  const n = String(name).trim();
+  if (!n) return 0;
+  if (/^\d+-\d+(\.jar)?$/i.test(n)) return 1;
+  if (/\.(jar|zip)$/i.test(n) || /\d/.test(n)) return 2;
+  return 3;
+}
+
+function loadCurseNameCache() {
+  try {
+    if (!fs.existsSync(CF_NAME_CACHE_FILE)) return {};
+    const parsed = JSON.parse(fs.readFileSync(CF_NAME_CACHE_FILE, 'utf8'));
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+  } catch {}
+  return {};
+}
+
+function saveCurseNameCache(cache) {
+  try {
+    fs.mkdirSync(path.dirname(CF_NAME_CACHE_FILE), { recursive: true });
+    fs.writeFileSync(CF_NAME_CACHE_FILE, JSON.stringify(cache, null, 2));
+  } catch {}
+}
+
+async function fetchCurseProjectName(projectID, fileID) {
+  try {
+    const res = await fetch(`${CF_WEB_API}/${projectID}`, { headers: HEADERS, timeout: 8000 });
+    if (res.ok) {
+      const data = await res.json();
+      const projectName = data?.data?.name || data?.name;
+      if (projectName) return normalizeDisplayName(projectName);
+    }
+  } catch {}
+
+  // Fallback: some responses expose file metadata where the filename is usable.
+  if (Number.isFinite(+fileID)) {
+    try {
+      const res = await fetch(`${CF_WEB_API}/${projectID}/files/${fileID}`, { headers: HEADERS, timeout: 8000 });
+      if (!res.ok) return '';
+      const data = await res.json();
+      const fileName = data?.data?.displayName || data?.data?.fileName || data?.displayName || data?.fileName;
+      return normalizeDisplayName(fileName);
+    } catch {}
+  }
+  return '';
 }
 
 /**

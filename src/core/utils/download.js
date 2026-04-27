@@ -12,8 +12,9 @@ const http  = require('follow-redirects').http;
  * @param {string}   dest        - destination file path
  * @param {function} onProgress  - called with (pct 0-100)
  * @param {object}   headers     - optional HTTP headers (e.g. User-Agent)
+ * @param {object}   options     - { preferRemoteFilename?: boolean }
  */
-function downloadFile(url, dest, onProgress = () => {}, headers = {}) {
+function downloadFile(url, dest, onProgress = () => {}, headers = {}, options = {}) {
   return new Promise((resolve, reject) => {
     fs.mkdirSync(path.dirname(dest), { recursive: true });
 
@@ -25,7 +26,7 @@ function downloadFile(url, dest, onProgress = () => {}, headers = {}) {
 
     const stream = fs.createWriteStream(tmp);
 
-    const options = {
+    const requestOptions = {
       maxRedirects: 15,
       timeout:      60000,
       headers: {
@@ -39,12 +40,12 @@ function downloadFile(url, dest, onProgress = () => {}, headers = {}) {
       try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
     };
 
-    proto.get(url, options, (res) => {
+    proto.get(url, requestOptions, (res) => {
       // follow-redirects already handles 301/302 automatically,
       // but handle unexpected 3xx just in case
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         cleanup();
-        return downloadFile(res.headers.location, dest, onProgress, headers)
+        return downloadFile(res.headers.location, dest, onProgress, headers, options)
           .then(resolve).catch(reject);
       }
 
@@ -65,8 +66,18 @@ function downloadFile(url, dest, onProgress = () => {}, headers = {}) {
       res.on('end', () => {
         stream.end(() => {
           try {
-            fs.renameSync(tmp, dest);
-            resolve();
+            const remoteFilename = getRemoteFilename(res);
+            let finalDest = dest;
+
+            if (options.preferRemoteFilename && remoteFilename) {
+              const safeRemote = sanitizeRemoteFilename(remoteFilename);
+              if (safeRemote) {
+                finalDest = ensureUniquePath(path.join(path.dirname(dest), safeRemote));
+              }
+            }
+
+            fs.renameSync(tmp, finalDest);
+            resolve({ dest: finalDest, remoteFilename });
           } catch (e) {
             cleanup();
             reject(e);
@@ -113,7 +124,15 @@ async function downloadBatch(items, concurrency = 5, onEach = () => {}) {
       const item = items[index++];
       try {
         if (!fs.existsSync(item.dest)) {
-          await downloadFile(item.url, item.dest, () => {}, item.headers || {});
+          const result = await downloadFile(
+            item.url,
+            item.dest,
+            () => {},
+            item.headers || {},
+            { preferRemoteFilename: !!item.preferRemoteFilename }
+          );
+          if (result?.dest && result.dest !== item.dest) item.dest = result.dest;
+          if (!item.displayName && result?.remoteFilename) item.displayName = result.remoteFilename;
         }
         onEach(item, null);
       } catch (e) {
@@ -127,6 +146,50 @@ async function downloadBatch(items, concurrency = 5, onEach = () => {}) {
     Array.from({ length: Math.min(concurrency, items.length) }, worker)
   );
   return failed;
+}
+
+function getRemoteFilename(res) {
+  const cd = res?.headers?.['content-disposition'];
+  const fromCd = parseContentDispositionFilename(cd);
+  if (fromCd) return fromCd;
+
+  const responseUrl = res?.responseUrl;
+  if (responseUrl) {
+    try {
+      const pathname = new URL(responseUrl).pathname || '';
+      const base = decodeURIComponent(path.basename(pathname));
+      if (base && base !== '/' && base !== '.') return base;
+    } catch {}
+  }
+  return null;
+}
+
+function parseContentDispositionFilename(cd) {
+  if (!cd || typeof cd !== 'string') return null;
+  const utf8 = cd.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+  if (utf8?.[1]) {
+    try { return decodeURIComponent(utf8[1].trim().replace(/^"(.*)"$/, '$1')); } catch {}
+  }
+  const plain = cd.match(/filename\s*=\s*("?)([^";]+)\1/i);
+  if (plain?.[2]) return plain[2].trim();
+  return null;
+}
+
+function sanitizeRemoteFilename(n) {
+  if (!n || typeof n !== 'string') return '';
+  return n.replace(/[/\\:*?"<>|]/g, '_').trim();
+}
+
+function ensureUniquePath(candidate) {
+  if (!fs.existsSync(candidate)) return candidate;
+  const dir = path.dirname(candidate);
+  const ext = path.extname(candidate);
+  const base = path.basename(candidate, ext);
+  for (let i = 1; i < 1000; i++) {
+    const next = path.join(dir, `${base} (${i})${ext}`);
+    if (!fs.existsSync(next)) return next;
+  }
+  return candidate;
 }
 
 module.exports = { downloadFile, fetchJSON, downloadBatch };
