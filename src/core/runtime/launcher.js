@@ -32,6 +32,9 @@ class GameLauncher {
 
     sanitizeModsDir(entry.modsDir, mcVersion);
     fs.mkdirSync(entry.gameDir, { recursive: true });
+    // Some modpacks ship config files with read-only attributes on Windows.
+    // Sodium writes to config/sodium-options.json at startup and crashes otherwise.
+    ensureWritableRuntimeFiles(entry.gameDir);
 
     // ── Load version JSONs ────────────────────────────────────────────────────
     const loaderJson  = loadVersionJson(versionId);
@@ -280,6 +283,37 @@ function sanitizeModsDir(modsDir, mcVersion) {
       try { fs.unlinkSync(path.join(modsDir, file)); console.log('[launch] removed from mods/:', file); }
       catch {}
     }
+  }
+}
+
+function ensureWritableRuntimeFiles(gameDir) {
+  const targets = [
+    path.join(gameDir, 'config'),
+    path.join(gameDir, 'options.txt'),
+    path.join(gameDir, 'optionsof.txt'),
+    path.join(gameDir, 'optionsshaders.txt'),
+  ];
+  for (const p of targets) {
+    if (!fs.existsSync(p)) continue;
+    makeWritableRecursive(p);
+  }
+}
+
+function makeWritableRecursive(target) {
+  let st;
+  try { st = fs.lstatSync(target); } catch { return; }
+  if (st.isSymbolicLink()) return;
+
+  if (st.isDirectory()) {
+    let entries = [];
+    try { entries = fs.readdirSync(target); } catch {}
+    for (const name of entries) makeWritableRecursive(path.join(target, name));
+    try { fs.chmodSync(target, st.mode | 0o700); } catch {}
+    return;
+  }
+
+  if (st.isFile()) {
+    try { fs.chmodSync(target, st.mode | 0o200); } catch {}
   }
 }
 
