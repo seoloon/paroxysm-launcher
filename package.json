@@ -1,6 +1,6 @@
 {
   "name": "paroxysm-launcher",
-  "version": "playtest-1.0.0-alpha",
+  "version": "PLAYTEST--1.0.0-alpha",
   "description": "Paroxysm Launcher — The final Minecraft launcher",
   "author": "Seoloon",
   "main": "src/main.js",

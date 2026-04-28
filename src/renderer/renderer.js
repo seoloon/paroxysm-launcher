@@ -154,6 +154,14 @@ function notify(message,type='info',timeout=3400){
   setTimeout(dismiss,Math.max(1400,timeout|0));
 }
 function notifyError(error){notify(t('error.generic')+': '+(error||t('error.unknown')),'error',4800);}
+async function loadAppVersion(){
+  const el=$('tb-version');
+  if(!el)return;
+  try{
+    const version=await px.app.version();
+    if(version) el.textContent=String(version);
+  }catch{}
+}
 
 let _confirmResolver=null;
 function closeConfirmDialog(answer=false){
@@ -2417,6 +2425,7 @@ $('ci-create').addEventListener('click', async () => {
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 async function boot(){
+  await loadAppVersion();
   await refreshAuth();
   await loadLibrary();
   await loadSettings();
