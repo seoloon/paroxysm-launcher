@@ -64,8 +64,8 @@ a:hover{color:var(--violet)}
 .account-mini{display:flex;align-items:center;gap:12px;padding:10px;border-radius:var(--r-md);border:1px solid transparent;background:transparent;color:var(--text1);width:100%;text-align:left;cursor:pointer;transition:all .2s;}
 .account-mini:hover{background:rgba(139,92,246,.08);border-color:var(--border)}
 .acct-avatar{width:36px;height:36px;border-radius:10px;flex-shrink:0;background:linear-gradient(135deg,var(--violet),var(--cyan));display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;color:#fff;box-shadow:0 4px 12px rgba(139,92,246,.3);position:relative;overflow:hidden}
-.acct-name{font-size:13px;font-weight:600;color:var(--text0)}
-.acct-status{font-size:11px;margin-top:2px;font-weight:500}
+.acct-name{display:block;font-size:13px;font-weight:600;color:var(--text0)}
+.acct-status{display:block;font-size:11px;margin-top:2px;font-weight:500}
 .acct-status.online{color:var(--green);text-shadow:0 0 8px rgba(16,185,129,.4)}
 .acct-status.offline{color:var(--text2)}
 /* Content */
@@ -148,6 +148,22 @@ a:hover{color:var(--violet)}
 .form-hint{font-size:12px;color:var(--text2);margin-top:12px;line-height:1.6}
 .form-input{width:100%;padding:12px 14px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r-sm);color:var(--text0);font-size:14px;font-weight:500;outline:none;transition:all .2s;}
 .form-input:focus{border-color:var(--violet);box-shadow:0 0 0 3px rgba(139,92,246,.15)}
+.form-input[type="text"],.form-input[type="password"],.form-input[type="email"],.form-input[type="number"],textarea.form-input{background-image:none}
+select.form-input,.mr-select{
+  appearance:none;-webkit-appearance:none;-moz-appearance:none;
+  padding-right:36px;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M2.5 4.5L6 8l3.5-3.5' stroke='%2394A3B8' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;
+  background-position:right 12px center;
+  background-size:12px 12px;
+}
+select.form-input:hover,.mr-select:hover{border-color:var(--border-hi);color:var(--text0)}
+select.form-input:focus,.mr-select:focus{
+  border-color:var(--cyan);
+  box-shadow:0 0 0 3px rgba(34,211,238,.14);
+  background-color:var(--bg1);
+}
+select.form-input option,.mr-select option{background:var(--bg1);color:var(--text0)}
 input[type="range"]{-webkit-appearance:none;appearance:none;width:100%;background:transparent;margin:12px 0;}
 input[type="range"]:focus{outline:none}
 input[type="range"]::-webkit-slider-runnable-track{width:100%;height:8px;cursor:pointer;background:var(--bg0);border-radius:4px;border:1px solid var(--border);}
@@ -451,7 +467,7 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
 <div id="app">
   <div id="titlebar">
     <div class="tb-logo">
-      <img class="tb-logo-img" src="applogo.png">
+      <img class="tb-logo-img" src="applogo.png" alt="Paroxysm logo">
       <span class="tb-logo-text">PAROXYSM</span>
       <span class="tb-version">playtest-v1.0.0-alpha</span>
     </div>
@@ -485,11 +501,11 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
       <div class="nav-spacer"></div>
       <div class="nav-footer">
         <button class="account-mini" id="account-mini" data-page="account">
-          <div class="acct-avatar" id="acct-avatar">?</div>
-          <div>
-      <div class="acct-name" id="acct-name">Non connecté</div>
-      <div class="acct-status offline" id="acct-status">Hors-ligne</div>
-          </div>
+          <span class="acct-avatar" id="acct-avatar">?</span>
+          <span>
+      <span class="acct-name" id="acct-name">Non connecté</span>
+      <span class="acct-status offline" id="acct-status">Hors-ligne</span>
+          </span>
         </button>
       </div>
     </nav>
@@ -514,7 +530,7 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
         <div class="lib-toolbar">
           <div class="search-wrap">
             <svg viewBox="0 0 16 16" fill="none" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10.5 10.5l3 3"/></svg>
-            <input type="text" id="inp-search" class="search-input" data-i18n-placeholder="lib.search_ph" placeholder="Rechercher..."/>
+            <input type="text" id="inp-search" class="search-input" data-i18n-placeholder="lib.search_ph" placeholder="Rechercher..." aria-label="Rechercher dans la bibliothèque"/>
           </div>
         </div>
         <div id="lib-grid" class="library-grid"></div>
@@ -556,9 +572,9 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
         <div class="mr-toolbar" style="margin-bottom:20px">
           <div class="mr-search-wrap">
             <svg viewBox="0 0 16 16" fill="none" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10.5 10.5l3 3"/></svg>
-            <input type="text" id="mr-search" class="mr-search-input" data-i18n-placeholder="browse.search_modrinth" placeholder="Rechercher sur Modrinth..."/>
+            <input type="text" id="mr-search" class="mr-search-input" data-i18n-placeholder="browse.search_modrinth" placeholder="Rechercher sur Modrinth..." aria-label="Rechercher sur Modrinth"/>
           </div>
-          <select id="mr-version-filter" class="mr-select">
+          <select id="mr-version-filter" class="mr-select" aria-label="Filtre version Minecraft">
             <option value="" data-i18n="browse.all_versions">Toutes versions</option>
             <option value="1.20.1">1.20.1</option>
             <option value="1.20.4">1.20.4</option>
@@ -570,14 +586,14 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
             <option value="1.16.5">1.16.5</option>
             <option value="1.12.2">1.12.2</option>
           </select>
-          <select id="mr-loader-filter" class="mr-select">
+          <select id="mr-loader-filter" class="mr-select" aria-label="Filtre modloader">
             <option value="" data-i18n="browse.all_loaders">Tous loaders</option>
             <option value="forge">Forge</option>
             <option value="neoforge">NeoForge</option>
             <option value="fabric">Fabric</option>
             <option value="quilt">Quilt</option>
           </select>
-          <select id="mr-sort-filter" class="mr-select">
+          <select id="mr-sort-filter" class="mr-select" aria-label="Tri Modrinth">
             <option value="relevance" data-i18n="browse.sort.relevance">Pertinence</option>
             <option value="downloads" data-i18n="browse.sort.downloads">Téléchargements</option>
             <option value="follows" data-i18n="browse.sort.follows">Popularité</option>
@@ -631,8 +647,8 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
           <div class="settings-card">
             <h3 data-i18n="profile.offline">Mode hors-ligne</h3>
             <div class="form-group">
-              <label class="form-label"><span data-i18n="profile.username_label">Nom d'utilisateur</span> <span style="font-weight:400;color:var(--text2);font-size:12px">(offline)</span></label>
-              <input type="text" class="form-input" id="inp-username" data-i18n-placeholder="profile.username" placeholder="Votre pseudo" maxlength="16"/>
+              <label class="form-label" for="inp-username"><span data-i18n="profile.username_label">Nom d'utilisateur</span> <span style="font-weight:400;color:var(--text2);font-size:12px">(offline)</span></label>
+              <input type="text" class="form-input" id="inp-username" data-i18n-placeholder="profile.username" placeholder="Votre pseudo" maxlength="16" aria-label="Nom utilisateur hors ligne"/>
               <div class="form-hint" data-i18n="profile.username_hint">Utilisé si non connecté ou si le mode hors-ligne est forcé.</div>
             </div>
             <div class="toggle-row" style="margin-top:24px">
@@ -655,7 +671,7 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
             <h3 data-i18n="settings.perf">Performances</h3>
             <div class="form-group">
               <label class="form-label"><span data-i18n="settings.ram_label">RAM allouée</span> — <span class="accent" id="ram-val">4 GB</span> <span id="ram-system-info" style="font-size:11px;color:var(--text2);font-weight:400"></span></label>
-              <input type="range" id="inp-ram" min="1" max="32" step="1" value="4"/>
+              <input type="range" id="inp-ram" min="1" max="32" step="1" value="4" aria-label="RAM globale allouée"/>
               <div id="ram-warning" style="display:none;margin-top:10px;padding:10px 14px;border-radius:var(--r-sm);background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);color:var(--orange);font-size:12px;font-weight:600;line-height:1.5"></div>
               <div class="form-hint" data-i18n="settings.ram_hint">Recommandé : 4-8 GB pour Forge, 2-4 GB pour Fabric.</div>
             </div>
@@ -671,7 +687,7 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
             <h3 data-i18n="settings.cf_key">Clé API CurseForge</h3>
             <div class="form-group" style="max-width:50%">
               <label class="form-label">API Key <span style="font-weight:400;color:var(--text2);font-size:12px" data-i18n="settings.cf_key_opt">(optionnel)</span></label>
-              <input type="password" class="form-input" id="inp-cf-key" placeholder="$2a$10$..."/>
+              <input type="password" class="form-input" id="inp-cf-key" placeholder="$2a$10$..." aria-label="Clé API CurseForge"/>
               <div class="form-hint" data-i18n-html="settings.cf_key_hint_full">Améliore la fiabilité des téléchargements. Obtenez une clé gratuite sur <a id="cf-link" href="#">console.curseforge.com</a>.</div>
             </div>
           </div>
@@ -679,11 +695,11 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
           <div class="settings-card">
             <h3 data-i18n="settings.language">Langue</h3>
             <div class="form-group" style="max-width:320px">
-              <label class="form-label" data-i18n="settings.language_sub">Interface language</label>
-              <div style="display:flex;gap:10px;margin-top:4px">
-                <button id="lang-fr" class="lang-btn active" data-lang="fr" title="Français" style="flex:1;padding:10px 0;border-radius:var(--r-sm);border:2px solid var(--violet);background:rgba(139,92,246,.1);color:var(--text0);font-size:22px;cursor:pointer;transition:all .2s;text-align:center">🇫🇷</button>
-                <button id="lang-en" class="lang-btn" data-lang="en" title="English" style="flex:1;padding:10px 0;border-radius:var(--r-sm);border:1px solid var(--border);background:transparent;color:var(--text1);font-size:22px;cursor:pointer;transition:all .2s;text-align:center">🇬🇧</button>
-              </div>
+              <label class="form-label" for="inp-language" data-i18n="settings.language_sub">Interface language</label>
+              <select class="form-input" id="inp-language" aria-label="Langue de l'interface">
+                <option value="fr">Français</option>
+                <option value="en">English</option>
+              </select>
             </div>
           </div>
           <div class="settings-card">
@@ -796,7 +812,7 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
         </div>
         <div style="position:relative;flex:1;max-width:280px;margin-left:auto">
           <svg style="position:absolute;left:11px;top:50%;transform:translateY(-50%);width:13px;height:13px;stroke:var(--text2);pointer-events:none" viewBox="0 0 16 16" fill="none" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10.5 10.5l3 3"/></svg>
-          <input id="pack-content-search" type="text" data-i18n-placeholder="pack.content.search" placeholder="Filtrer les fichiers..." style="width:100%;padding:8px 10px 8px 30px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r-sm);color:var(--text0);font-size:12px;outline:none;font-family:var(--font)"/>
+          <input id="pack-content-search" type="text" data-i18n-placeholder="pack.content.search" placeholder="Filtrer les fichiers..." aria-label="Filtrer le contenu de l'instance" style="width:100%;padding:8px 10px 8px 30px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r-sm);color:var(--text0);font-size:12px;outline:none;font-family:var(--font)"/>
         </div>
         <div id="pack-resolve-row" style="display:none;align-items:center;gap:10px;padding:6px 12px;background:rgba(245,158,11,.06);border:1px solid rgba(245,158,11,.2);border-radius:var(--r-sm)">
           <span style="font-size:12px;color:var(--orange)" data-i18n="pack.content.resolve">Noms numériques détectés</span>
@@ -851,13 +867,13 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
             </div>
             <div style="flex:1">
               <div class="form-group">
-                <label class="form-label" data-i18n="pack.settings.custom_name">Nom personnalisé</label>
-                <input type="text" class="form-input" id="pack-custom-name" data-i18n-placeholder="pack.settings.custom_name_ph" placeholder="Nom d'affichage..."/>
+                <label class="form-label" for="pack-custom-name" data-i18n="pack.settings.custom_name">Nom personnalisé</label>
+                <input type="text" class="form-input" id="pack-custom-name" data-i18n-placeholder="pack.settings.custom_name_ph" placeholder="Nom d'affichage..." aria-label="Nom personnalisé de l'instance"/>
                 <div class="form-hint" data-i18n="pack.settings.custom_name_hint">Laissez vide pour utiliser le nom d'origine.</div>
               </div>
               <div class="form-group">
-                <label class="form-label" data-i18n="pack.settings.notes">Notes</label>
-                <textarea class="form-input" id="pack-notes" rows="3" data-i18n-placeholder="pack.settings.notes_ph" placeholder="Notes personnelles sur ce modpack..." style="resize:vertical;min-height:72px;-webkit-user-select:text;user-select:text"></textarea>
+                <label class="form-label" for="pack-notes" data-i18n="pack.settings.notes">Notes</label>
+                <textarea class="form-input" id="pack-notes" rows="3" data-i18n-placeholder="pack.settings.notes_ph" placeholder="Notes personnelles sur ce modpack..." aria-label="Notes de l'instance" style="resize:vertical;min-height:72px;-webkit-user-select:text;user-select:text"></textarea>
               </div>
             </div>
           </div>
@@ -868,7 +884,7 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
           <div class="pp-settings-section-title" data-i18n="pack.settings.perf">Performance</div>
           <div class="form-group">
             <label class="form-label"><span data-i18n="pack.settings.ram_label">RAM dédiée</span> — <span class="accent" id="pack-ram-val">Global</span> <span id="pack-ram-system-info" style="font-size:11px;color:var(--text2);font-weight:400"></span></label>
-            <input type="range" id="pack-ram" min="0" max="32" step="1" value="0"/>
+            <input type="range" id="pack-ram" min="0" max="32" step="1" value="0" aria-label="RAM dédiée à l'instance"/>
             <div id="pack-ram-warning" style="display:none;margin-top:10px;padding:10px 14px;border-radius:var(--r-sm);background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);color:var(--orange);font-size:12px;font-weight:600;line-height:1.5"></div>
             <div class="form-hint"><span data-i18n="pack.settings.ram_hint">0 = utiliser la valeur globale des</span>
               <button class="nav-btn btn-inline" data-page="settings" data-i18n="pack.settings.ram_hint2">paramètres.</button>
@@ -916,7 +932,7 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
       <button class="pp-filter-btn" data-cofilter="config" data-i18n="pack.content.filter.config">Configs</button>
       <div style="position:relative;margin-left:8px">
         <svg style="position:absolute;left:11px;top:50%;transform:translateY(-50%);width:13px;height:13px;stroke:var(--text2);pointer-events:none" viewBox="0 0 16 16" fill="none" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10.5 10.5l3 3"/></svg>
-        <input id="co-search" type="text" data-i18n-placeholder="overlay.search_file" placeholder="Rechercher un fichier..." style="padding:7px 12px 7px 30px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r-sm);color:var(--text0);font-size:12px;outline:none;width:220px;font-family:var(--font)"/>
+        <input id="co-search" type="text" data-i18n-placeholder="overlay.search_file" placeholder="Rechercher un fichier..." aria-label="Rechercher un fichier dans le contenu" style="padding:7px 12px 7px 30px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r-sm);color:var(--text0);font-size:12px;outline:none;width:220px;font-family:var(--font)"/>
       </div>
       <button id="co-resolve-btn" style="display:none;margin-left:auto;padding:6px 14px;border-radius:var(--r-sm);border:1px solid var(--orange);background:transparent;color:var(--orange);font-size:11px;font-weight:700;cursor:pointer;font-family:var(--font);transition:all .15s"><span data-i18n="pack.content.resolve_btn">Résoudre les noms</span></button>
     </div>
@@ -936,12 +952,12 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
     </div>
     <div style="padding:28px;display:flex;flex-direction:column;gap:20px">
       <div class="form-group" style="margin:0">
-        <label class="form-label" data-i18n="create.name">Nom de l'instance</label>
-        <input type="text" class="form-input" id="ci-name" data-i18n-placeholder="create.name_ph" placeholder="Mon instance..." maxlength="64"/>
+        <label class="form-label" for="ci-name" data-i18n="create.name">Nom de l'instance</label>
+        <input type="text" class="form-input" id="ci-name" data-i18n-placeholder="create.name_ph" placeholder="Mon instance..." maxlength="64" aria-label="Nom de l'instance"/>
       </div>
       <div class="form-group" style="margin:0">
-        <label class="form-label" data-i18n="create.mc_version">Version Minecraft</label>
-        <select class="form-input" id="ci-mc-version" style="cursor:pointer">
+        <label class="form-label" for="ci-mc-version" data-i18n="create.mc_version">Version Minecraft</label>
+        <select class="form-input" id="ci-mc-version" style="cursor:pointer" aria-label="Version Minecraft">
           <option value="" data-i18n="create.loading_versions">Chargement des versions...</option>
         </select>
       </div>
@@ -955,8 +971,8 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
         </div>
       </div>
       <div class="form-group" style="margin:0" id="ci-loader-version-group">
-        <label class="form-label" data-i18n="create.loader_version">Version du modloader</label>
-        <select class="form-input" id="ci-loader-version" style="cursor:pointer">
+        <label class="form-label" for="ci-loader-version" data-i18n="create.loader_version">Version du modloader</label>
+        <select class="form-input" id="ci-loader-version" style="cursor:pointer" aria-label="Version du modloader">
           <option value="" data-i18n="create.select_mc_first">Sélectionnez d'abord une version MC...</option>
         </select>
       </div>
@@ -1080,7 +1096,7 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
     <!-- Recherche fichiers -->
     <div style="position:relative">
       <svg style="position:absolute;left:11px;top:50%;transform:translateY(-50%);width:13px;height:13px;stroke:var(--text2);pointer-events:none" viewBox="0 0 16 16" fill="none" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10.5 10.5l3 3"/></svg>
-      <input id="pp-file-search" type="text" data-i18n-placeholder="overlay.filter_ph" placeholder="Filtrer..." style="width:100%;padding:8px 10px 8px 30px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r-sm);color:var(--text0);font-size:12px;outline:none;font-family:var(--font)"/>
+      <input id="pp-file-search" type="text" data-i18n-placeholder="overlay.filter_ph" placeholder="Filtrer..." aria-label="Filtrer les fichiers du panneau" style="width:100%;padding:8px 10px 8px 30px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r-sm);color:var(--text0);font-size:12px;outline:none;font-family:var(--font)"/>
     </div>
     <!-- Liste fichiers -->
     <div id="pp-files-list" style="display:flex;flex-direction:column;gap:3px"></div>

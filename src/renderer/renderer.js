@@ -1407,15 +1407,10 @@ async function loadSettings(){
     await window.i18n.initI18n(cfg);
     // lib-count is dynamic; i18n static pass sets "lib.loading", so re-render library values after init.
     renderLibrary(allPacks);
-    // Reflect saved language on the selector buttons
+    // Reflect saved language on the selector
     const lang=window.i18n.getLang();
-    document.querySelectorAll('.lang-btn').forEach(b=>{
-      const active=b.dataset.lang===lang;
-      b.style.border=active?'2px solid var(--violet)':'1px solid var(--border)';
-      b.style.background=active?'rgba(139,92,246,.1)':'transparent';
-      b.style.color=active?'var(--text0)':'var(--text1)';
-      b.style.fontWeight=active?'700':'600';
-    });
+    const langSel=$('inp-language');
+    if(langSel) langSel.value=lang;
   }
 
   // Fetch real system RAM and adapt the slider
@@ -1504,44 +1499,34 @@ $('btn-update-install').addEventListener('click', async function(){
 // cf-link is re-attached by i18n.js applyTranslations after innerHTML update
 
 // ── Language selector ─────────────────────────────────────────────────────────
-document.querySelectorAll('.lang-btn').forEach(btn=>{
-  btn.addEventListener('click',()=>{
-    if(!window.i18n)return;
-    const lang=btn.dataset.lang;
-    window.i18n.setLang(lang);
-    // Update button styles
-    document.querySelectorAll('.lang-btn').forEach(b=>{
-      const active=b.dataset.lang===lang;
-      b.style.border=active?'2px solid var(--violet)':'1px solid var(--border)';
-      b.style.background=active?'rgba(139,92,246,.1)':'transparent';
-      b.style.color=active?'var(--text0)':'var(--text1)';
-      b.style.fontWeight=active?'700':'600';
-    });
-    // Re-render dynamic content
-    renderLibrary(allPacks);
-    if(currentPack)openPlayPanel(currentPack);
-    updateRamWarning(parseInt($('inp-ram').value)||4);
-    const ramSI=$('ram-system-info');
-    if(ramSI&&_systemRamGB)ramSI.textContent=t('settings.ram_system',{n:_systemRamGB});
-    const packRamInput = $('pack-ram');
-    const packRamVal = $('pack-ram-val');
-    if (packRamInput && packRamVal) {
-      const max = _systemRamGB ? Math.max(1, Math.floor(_systemRamGB)) : (parseInt(packRamInput.max, 10) || 32);
-      packRamInput.max = max;
-      const safe = Math.max(0, Math.min(parseInt(packRamInput.value, 10) || 0, max));
-      packRamInput.value = String(safe);
-      packRamVal.textContent = safe > 0 ? safe + ' GB' : t('pack.settings.ram_global');
-      const packRamSystemInfo = $('pack-ram-system-info');
-      if (packRamSystemInfo && _systemRamGB) {
-        packRamSystemInfo.textContent = t('pack.settings.ram_system', { n: _systemRamGB });
-      }
-      updatePackRamWarning(safe);
+$('inp-language')?.addEventListener('change',()=>{
+  if(!window.i18n)return;
+  const lang=String($('inp-language').value||'fr');
+  window.i18n.setLang(lang);
+  // Re-render dynamic content
+  renderLibrary(allPacks);
+  if(currentPack)openPlayPanel(currentPack);
+  updateRamWarning(parseInt($('inp-ram').value)||4);
+  const ramSI=$('ram-system-info');
+  if(ramSI&&_systemRamGB)ramSI.textContent=t('settings.ram_system',{n:_systemRamGB});
+  const packRamInput = $('pack-ram');
+  const packRamVal = $('pack-ram-val');
+  if (packRamInput && packRamVal) {
+    const max = _systemRamGB ? Math.max(1, Math.floor(_systemRamGB)) : (parseInt(packRamInput.max, 10) || 32);
+    packRamInput.max = max;
+    const safe = Math.max(0, Math.min(parseInt(packRamInput.value, 10) || 0, max));
+    packRamInput.value = String(safe);
+    packRamVal.textContent = safe > 0 ? safe + ' GB' : t('pack.settings.ram_global');
+    const packRamSystemInfo = $('pack-ram-system-info');
+    if (packRamSystemInfo && _systemRamGB) {
+      packRamSystemInfo.textContent = t('pack.settings.ram_system', { n: _systemRamGB });
     }
-    renderUpdateState(_lastUpdateState);
-    // Re-run refreshAuth so acct-name/acct-status show correct translated strings
-    refreshAuth();
-    saveAllSettings().catch(()=>{});
-  });
+    updatePackRamWarning(safe);
+  }
+  renderUpdateState(_lastUpdateState);
+  // Re-run refreshAuth so acct-name/acct-status show correct translated strings
+  refreshAuth();
+  saveAllSettings().catch(()=>{});
 });
 async function loadDataPath(){const p=await px.config.get('__dataPath__').catch(()=>null);if(p)$('data-path').textContent=p;}
 
