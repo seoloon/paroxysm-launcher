@@ -456,17 +456,62 @@ ipcMain.handle('system:ram', () => {
   return { totalMB, totalGB: Math.round(totalGB * 10) / 10 };
 });
 
+function scanInstanceFiles(entry, { includeConfig = true } = {}) {
+  if (!entry?.gameDir) return [];
+
+  const manifestPath = path.join(entry.gameDir, 'mods-manifest.json');
+  let manifest = {};
+  try {
+    if (fs.existsSync(manifestPath)) {
+      manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    }
+  } catch {}
+
+  const scanDirs = [
+    { dir: 'mods', type: 'mod' },
+    { dir: 'shaderpacks', type: 'shader' },
+    { dir: 'resourcepacks', type: 'resourcepack' },
+    ...(includeConfig ? [{ dir: 'config', type: 'config' }] : []),
+  ];
+
+  const results = [];
+  for (const { dir, type } of scanDirs) {
+    const full = path.join(entry.gameDir, dir);
+    if (!fs.existsSync(full)) continue;
+    let items = [];
+    try { items = fs.readdirSync(full, { withFileTypes: true }); } catch { continue; }
+
+    for (const item of items) {
+      if (!item.isFile()) continue;
+      const filePath = path.join(full, item.name);
+      let size = 0;
+      try { size = fs.statSync(filePath).size; } catch {}
+      const manifestEntry = manifest[item.name];
+      const displayName = manifestEntry?.displayName || cleanFilename(item.name);
+
+      results.push({
+        name: displayName,
+        filename: item.name,
+        type,
+        size,
+        dir,
+        projectID: manifestEntry?.projectID,
+        fileID: manifestEntry?.fileID,
+      });
+    }
+  }
+
+  return results;
+}
+
 // ── Instance file listing (for play panel "Contenu" tab) ──────────────────────
-ipcMain.handle('config:get', (_, key) => {
+ipcMain.handle('config:get', async (_, key) => {
   // Special key: scan instance files with name resolution from manifest
   if (key && key.startsWith('__instanceFiles__:')) {
     const packId = key.slice('__instanceFiles__:'.length);
     const entry  = library.get(packId);
     if (!entry?.gameDir) return [];
     try {
-      const fs   = require('fs');
-      const path = require('path');
-
       // Load the manifest (filename → { displayName, projectID, fileID })
       const manifestPath = path.join(entry.gameDir, 'mods-manifest.json');
       let manifest = {};
@@ -509,13 +554,31 @@ ipcMain.handle('config:get', (_, key) => {
           });
         }
       }
-      return results.sort((a, b) => a.name.localeCompare(b.name));
+      return results.sort((a, b) => String(a.name || a.filename).localeCompare(String(b.name || b.filename)));
     } catch (e) {
       return [];
     }
   }
   // Normal config key
   return store.get(key);
+});
+
+ipcMain.handle('modrinth:get-installed-files', async (_, packId) => {
+  const entry = library.get(String(packId || ''));
+  if (!entry?.gameDir) return { ok: false, files: [] };
+  try {
+    const files = scanInstanceFiles(entry, { includeConfig: false })
+      .filter(f => ['mod', 'shader', 'resourcepack'].includes(String(f.type || '')));
+    await enrichWithModrinthMetadata(entry, files, { maxLookups: 12 });
+    for (const f of files) {
+      if (f.modrinthTitle && (!f.projectID || !f.name || f.name === cleanFilename(f.filename))) {
+        f.name = f.modrinthTitle;
+      }
+    }
+    return { ok: true, files };
+  } catch (e) {
+    return { ok: false, files: [], error: e.message };
+  }
 });
 
 // Nettoyer un nom de fichier en nom lisible
@@ -526,10 +589,156 @@ function cleanFilename(filename) {
     .replace(/\.jar$/i, '')
     .replace(/[-_]forge[-_]/gi, ' ')
     .replace(/[-_]fabric[-_]/gi, ' ')
+    .replace(/[-_]neoforge[-_]/gi, ' ')
+    .replace(/[-_]quilt[-_]/gi, ' ')
     .replace(/[+]mc[\d.]+/g, '')   // retire +mc1.20.1
     .replace(/[-_]\d+\.\d+[\d._-]*/g, (m) => ' ' + m.replace(/^[-_]/, ''))
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
     .replace(/[-_]+/g, ' ')
     .trim();
+}
+
+function getModrinthHashCachePath() {
+  return path.join(Store.BASE_DIR, 'cache', 'modrinth-hash-map.json');
+}
+
+function loadModrinthHashCache() {
+  const fallback = { byFile: {}, bySha1: {} };
+  try {
+    const file = getModrinthHashCachePath();
+    if (!fs.existsSync(file)) return fallback;
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8')) || {};
+    if (!raw || typeof raw !== 'object') return fallback;
+    return {
+      byFile: (raw.byFile && typeof raw.byFile === 'object') ? raw.byFile : {},
+      bySha1: (raw.bySha1 && typeof raw.bySha1 === 'object') ? raw.bySha1 : {},
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function saveModrinthHashCache(cache) {
+  try {
+    const file = getModrinthHashCachePath();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(cache, null, 2), 'utf8');
+  } catch {}
+}
+
+async function fetchModrinthVersionBySha1(sha1) {
+  const hash = String(sha1 || '').toLowerCase().trim();
+  if (!/^[a-f0-9]{40}$/.test(hash)) return null;
+  const urls = [
+    `${MODRINTH_API}/version_file/${hash}?algorithm=sha1`,
+    `${MODRINTH_API}/version_file/${hash}`,
+  ];
+  for (const url of urls) {
+    try {
+      const version = await modrinthFetch(url);
+      if (version?.id && version?.project_id) return version;
+    } catch {}
+  }
+  return null;
+}
+
+async function enrichWithModrinthMetadata(entry, files, options = {}) {
+  if (!entry?.gameDir || !Array.isArray(files) || files.length === 0) return files;
+  const allowedTypes = new Set(['mod', 'shader', 'resourcepack']);
+  const cache = loadModrinthHashCache();
+  const projectMetaCache = new Map();
+  let dirty = false;
+  let lookupsLeft = Number.isFinite(options.maxLookups) ? Math.max(0, Math.floor(options.maxLookups)) : 8;
+
+  for (const f of files) {
+    if (!allowedTypes.has(f.type)) continue;
+    const absPath = path.join(entry.gameDir, f.dir || '', f.filename || '');
+    if (!fs.existsSync(absPath)) continue;
+
+    let stat;
+    try { stat = fs.statSync(absPath); } catch { continue; }
+    const fingerprint = `${stat.size}:${Math.floor(stat.mtimeMs)}`;
+
+    const cachedByFile = cache.byFile[absPath];
+    if (cachedByFile && cachedByFile.fingerprint === fingerprint) {
+      f.sha1 = cachedByFile.sha1 || '';
+      f.modrinthProjectId = cachedByFile.projectId || '';
+      f.modrinthVersionId = cachedByFile.versionId || '';
+      f.modrinthProjectType = cachedByFile.projectType || '';
+      f.modrinthSlug = cachedByFile.slug || '';
+      f.modrinthTitle = cachedByFile.title || '';
+      continue;
+    }
+
+    let sha1 = '';
+    try { sha1 = hashFile(absPath, 'sha1'); } catch { continue; }
+
+    const cachedBySha1 = cache.bySha1[sha1];
+    if (cachedBySha1) {
+      cache.byFile[absPath] = { fingerprint, sha1, ...cachedBySha1 };
+      dirty = true;
+      f.sha1 = sha1;
+      f.modrinthProjectId = cachedBySha1.projectId || '';
+      f.modrinthVersionId = cachedBySha1.versionId || '';
+      f.modrinthProjectType = cachedBySha1.projectType || '';
+      f.modrinthSlug = cachedBySha1.slug || '';
+      f.modrinthTitle = cachedBySha1.title || '';
+      continue;
+    }
+
+    if (lookupsLeft <= 0) continue;
+    lookupsLeft--;
+
+    const ver = await fetchModrinthVersionBySha1(sha1);
+    const meta = {
+      projectId: '',
+      versionId: '',
+      projectType: '',
+      slug: '',
+      title: '',
+      missing: true,
+      updatedAt: Date.now(),
+    };
+    if (ver?.project_id) {
+      meta.projectId = String(ver.project_id);
+      meta.versionId = String(ver.id || '');
+      meta.projectType = String(ver.project_type || '');
+      delete meta.missing;
+      const cachedProject = projectMetaCache.get(meta.projectId);
+      if (cachedProject) {
+        meta.slug = cachedProject.slug;
+        meta.title = cachedProject.title;
+        if (!meta.projectType) meta.projectType = cachedProject.projectType;
+      } else {
+        try {
+          const project = await modrinthFetch(`${MODRINTH_API}/project/${meta.projectId}`);
+          const projectMeta = {
+            slug: String(project?.slug || ''),
+            title: String(project?.title || ''),
+            projectType: String(project?.project_type || ''),
+          };
+          projectMetaCache.set(meta.projectId, projectMeta);
+          meta.slug = projectMeta.slug;
+          meta.title = projectMeta.title;
+          if (!meta.projectType) meta.projectType = projectMeta.projectType;
+        } catch {}
+      }
+    }
+
+    cache.bySha1[sha1] = meta;
+    cache.byFile[absPath] = { fingerprint, sha1, ...meta };
+    dirty = true;
+
+    f.sha1 = sha1;
+    f.modrinthProjectId = meta.projectId || '';
+    f.modrinthVersionId = meta.versionId || '';
+    f.modrinthProjectType = meta.projectType || '';
+    f.modrinthSlug = meta.slug || '';
+    f.modrinthTitle = meta.title || '';
+  }
+
+  if (dirty) saveModrinthHashCache(cache);
+  return files;
 }
 // SECURITY FIX [Élevé] — shell:open : accepte uniquement les chemins dans BASE_DIR
 // ou dans un gameDir connu de la bibliothèque. Refuse toute URL.
@@ -563,9 +772,6 @@ ipcMain.handle('modpack:resolve-names', async (_, packId) => {
   const entry = library.get(packId);
   if (!entry?.gameDir) return { ok: false };
   try {
-    const fs   = require('fs');
-    const path = require('path');
-
     const modsDir     = path.join(entry.gameDir, 'mods');
     const manifestPath = path.join(entry.gameDir, 'mods-manifest.json');
     const cachePath = path.join(Store.BASE_DIR, 'cache', 'curseforge-names.json');
@@ -752,12 +958,14 @@ ipcMain.handle('auth:status', async () => {
 
 ipcMain.handle('auth:login', async () => {
   try {
-    // Lance le serveur local sur :3000, ouvre le navigateur, attend le callback
+    // Device Code Flow: pas de port local, navigateur + code utilisateur
     send('auth:browser-opening', {});
-    const code = await auth.startLogin();
+    const flow = await auth.startLoginDeviceCode((info) => {
+      send('auth:device-code', info || {});
+    });
     send('auth:exchanging', {});
     // Échange du code → tokens MS → XBL → XSTS → Minecraft
-    const { accessToken, refreshToken } = await auth.exchangeCode(code);
+    const { accessToken, refreshToken } = flow;
     const profile = await auth._fullAuthChain(accessToken, refreshToken);
     return { ok: true, profile };
   } catch (e) { return { ok: false, error: e.message }; }
