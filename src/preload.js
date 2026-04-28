@@ -55,6 +55,7 @@ contextBridge.exposeInMainWorld('px', {
     getVersions:      (id)     => ipcRenderer.invoke('modrinth:get-versions', id),
     download:         (params) => ipcRenderer.invoke('modrinth:download', params),
     getGameVersions:  ()       => ipcRenderer.invoke('modrinth:get-game-versions'),
+    getInstalledFiles:(packId) => ipcRenderer.invoke('modrinth:get-installed-files', packId),
   },
   modpack: {
     pickFile:     ()       => ipcRenderer.invoke('modpack:pick-file'),
