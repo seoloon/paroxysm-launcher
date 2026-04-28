@@ -22,6 +22,48 @@ function formatLoaderWithVersion(loader, version){
   const name=getLoaderDisplayName(loader);
   return version?`${name} ${version}`:name;
 }
+function normalizeInstalledMatchKey(value){
+  return String(value||'')
+    .toLowerCase()
+    .replace(/\.(jar|zip|mrpack|json|toml|cfg|txt|properties|ini)$/i,'')
+    .replace(/[^a-z0-9]+/g,'');
+}
+function prettifyContentName(rawName, rawFilename, type=''){
+  const source = String(rawName || rawFilename || '').trim();
+  if (!source) return '';
+  let s = source.replace(/\.(jar|zip|mrpack|json|toml|cfg|txt|properties|ini)$/i,'');
+  const likelyRaw = /[_-]/.test(s) || /\b(mc|minecraft|forge|neoforge|fabric|quilt)\b/i.test(s) || /\d+\.\d+/.test(s) || !/[A-ZÀ-Ý]/.test(s);
+  if (!likelyRaw) return s;
+
+  s = s
+    .replace(/[+]/g,' ')
+    .replace(/\b(mc|minecraft)\s*[0-9]+(?:\.[0-9]+){0,3}\b/ig,' ')
+    .replace(/\b(forge|neoforge|fabric|quilt)\b/ig,' ')
+    .replace(/\bv?[0-9]+(?:\.[0-9]+){1,3}(?:[-._]?(alpha|beta|rc)[-._]?\d*)?\b/ig,' ')
+    .replace(/([a-z])([A-Z])/g,'$1 $2')
+    .replace(/([a-zA-Z])(\d)/g,'$1 $2')
+    .replace(/(\d)([a-zA-Z])/g,'$1 $2')
+    .replace(/[_-]+/g,' ')
+    .replace(/[.]+/g,' ')
+    .replace(/\s+/g,' ')
+    .trim();
+
+  const upperSet = new Set(['api','ui','ux','fps','gpu','cpu','dns','rpc','mc','rtx','xaero','emi','rei','jei','ftb','nvidium']);
+  const titled = s.split(' ').map(w=>{
+    const lower = w.toLowerCase();
+    if (upperSet.has(lower)) return lower.toUpperCase();
+    return lower.charAt(0).toUpperCase() + lower.slice(1);
+  }).join(' ').trim();
+
+  if (type === 'mod' && titled.length <= 2) return source;
+  return titled || source;
+}
+function preprocessInstanceFiles(files){
+  return (Array.isArray(files) ? files : []).map(f=>{
+    const prettyName = prettifyContentName(f?.modrinthTitle || f?.name, f?.filename, f?.type);
+    return { ...f, prettyName };
+  });
+}
 function normalizeUuid(raw){
   const v=String(raw||'').replace(/-/g,'').toLowerCase();
   return /^[0-9a-f]{32}$/.test(v)?v:'';
@@ -62,6 +104,30 @@ function setPlayerAvatar(el,profile){
   img.addEventListener('error',tryNext);
   tryNext();
 }
+async function copyToClipboard(text){
+  const value=String(text||'');
+  if(!value)return false;
+  try{
+    if(navigator?.clipboard?.writeText){
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  }catch{}
+  try{
+    const ta=document.createElement('textarea');
+    ta.value=value;
+    ta.setAttribute('readonly','');
+    ta.style.position='fixed';
+    ta.style.opacity='0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok=document.execCommand('copy');
+    ta.remove();
+    return !!ok;
+  }catch{
+    return false;
+  }
+}
 const toastRoot=$('toast-root')||(()=>{const el=document.createElement('div');el.id='toast-root';document.body.appendChild(el);return el;})();
 function notify(message,type='info',timeout=3400){
   if(!message)return;
@@ -88,6 +154,40 @@ function notify(message,type='info',timeout=3400){
   setTimeout(dismiss,Math.max(1400,timeout|0));
 }
 function notifyError(error){notify(t('error.generic')+': '+(error||t('error.unknown')),'error',4800);}
+
+let _confirmResolver=null;
+function closeConfirmDialog(answer=false){
+  const overlay=$('confirm-overlay');
+  if(overlay)overlay.style.display='none';
+  const done=_confirmResolver;
+  _confirmResolver=null;
+  if(done)done(!!answer);
+}
+function showConfirmDialog({title='',message='',confirmText='',cancelText='',danger=false}={}){
+  return new Promise(resolve=>{
+    if(_confirmResolver){
+      _confirmResolver(false);
+      _confirmResolver=null;
+    }
+    const overlay=$('confirm-overlay');
+    const titleEl=$('confirm-title');
+    const msgEl=$('confirm-msg');
+    const okBtn=$('confirm-ok');
+    const cancelBtn=$('confirm-cancel');
+    if(!overlay||!titleEl||!msgEl||!okBtn||!cancelBtn){
+      resolve(false);
+      return;
+    }
+    _confirmResolver=resolve;
+    titleEl.textContent=title||t('dialog.confirm_title');
+    msgEl.textContent=String(message||'');
+    okBtn.textContent=confirmText||t('dialog.confirm');
+    cancelBtn.textContent=cancelText||t('dialog.cancel');
+    okBtn.classList.toggle('btn-confirm-danger',!!danger);
+    overlay.style.display='flex';
+    okBtn.focus();
+  });
+}
 
 function playMainIdleHtml(){
   return '<svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M8 5v14l11-7z"/></svg> '+t('pack.play');
@@ -155,7 +255,14 @@ function showPage(name){
   px.rpc?.setPage?.(name).catch?.(()=>{});
 }
 document.querySelectorAll('.nav-btn, .account-mini').forEach(btn=>{
-  btn.addEventListener('click',()=>{if(btn.dataset.page)showPage(btn.dataset.page);});
+  btn.addEventListener('click',()=>{
+    if (!btn.dataset.page) return;
+    if (btn.dataset.page === 'browse') {
+      mrState.targetInstanceId = '';
+      mrState.installedByType = null;
+    }
+    showPage(btn.dataset.page);
+  });
 });
 
 // ── Library ──────────────────────────────────────────────────────────────────
@@ -214,7 +321,13 @@ ${p.failedMods>0?`<div class="card-meta-item" style="color:var(--orange)">⚠ ${
   grid.querySelectorAll('[data-settings]').forEach(btn=>{btn.addEventListener('click',e=>{e.stopPropagation();const pack=allPacks.find(p=>p.id===btn.dataset.settings);if(pack)openPackPage(pack);});});
 }
 async function deleteModpack(pack){
-  if(!confirm(t('delete.confirm',{name:pack.name})))return;
+  const ok=await showConfirmDialog({
+    title:t('dialog.confirm_title'),
+    message:t('delete.confirm',{name:pack.name}),
+    confirmText:t('dialog.delete'),
+    danger:true,
+  });
+  if(!ok)return;
   await px.library.delete(pack.id);if(currentPack?.id===pack.id)closePlayPanel();await loadLibrary();
 }
 $('inp-search').addEventListener('input',()=>applyLibraryFilter());
@@ -346,7 +459,8 @@ function renderOverlay(){
 
   const shown=ppAllFiles.filter(f=>{
     if(filter!=='all'&&f.type!==filter)return false;
-    if(search&&!f.name.toLowerCase().includes(search)&&!(f.filename||'').toLowerCase().includes(search))return false;
+    const viewName=String(f.prettyName||f.name||'').toLowerCase();
+    if(search&&!viewName.includes(search)&&!(f.filename||'').toLowerCase().includes(search))return false;
     return true;
   });
 
@@ -365,12 +479,12 @@ function renderOverlay(){
     const color=TYPE_COLORS[f.type]||TYPE_COLORS.other;
     const label=TYPE_LABELS[f.type]||'?';
     const size=f.size?formatBytes(f.size):'';
-    const modAttr=f.type==='mod'?` data-modname="${esc(f.name)}" data-modfile="${esc(f.filename||f.name)}"`: '';
+    const modAttr=f.type==='mod'?` data-modname="${esc(f.prettyName||f.name)}" data-modfile="${esc(f.filename||f.name)}"`: '';
     return `<div class="co-file-card"${modAttr}>
 <div class="co-file-icon" style="background:${color}22;color:${color}">${label}</div>
 <div class="co-file-info">
-<div class="co-file-name" title="${esc(f.name)}">${esc(f.name)}</div>
-${f.filename&&f.filename!==f.name?`<div class="co-file-meta">${esc(f.filename)}${size?' · '+size:''}</div>`
+<div class="co-file-name" title="${esc(f.prettyName||f.name)}">${esc(f.prettyName||f.name)}</div>
+${f.filename&&f.filename!==(f.prettyName||f.name)?`<div class="co-file-meta">${esc(f.filename)}${size?' · '+size:''}</div>`
 :size?`<div class="co-file-meta">${size}</div>`:''}
 </div></div>`;
   }).join('');
@@ -446,7 +560,7 @@ async function ppLoadFiles(pack){
 
   try {
     const files=await px.config.get('__instanceFiles__:'+pack.id);
-    if(Array.isArray(files)){ppAllFiles=files;}
+    if(Array.isArray(files)){ppAllFiles=preprocessInstanceFiles(files);}
   } catch(e){ppAllFiles=[];}
 
   // Détecter les noms numériques (projectID-fileID.jar non résolus)
@@ -480,7 +594,9 @@ function ppRenderFiles(){
 
   const shown=ppAllFiles.filter(f=>{
     if(filter!=='all'&&f.type!==filter)return false;
-    if(search&&!f.name.toLowerCase().includes(search))return false;
+    const viewName = String(f.prettyName || f.name || '').toLowerCase();
+    const fileName = String(f.filename || '').toLowerCase();
+    if(search && !viewName.includes(search) && !fileName.includes(search))return false;
     return true;
   });
 
@@ -493,7 +609,7 @@ function ppRenderFiles(){
     const size=f.size?formatBytes(f.size):'';
     return `<div class="pp-file-item">
 <div class="pp-file-icon" style="background:${color}22;color:${color}">${label}</div>
-<div class="pp-file-name" title="${esc(f.name)}">${esc(f.name)}</div>
+<div class="pp-file-name" title="${esc(f.prettyName||f.name)}">${esc(f.prettyName||f.name)}</div>
 ${size?`<div class="pp-file-size">${size}</div>`:''}
 </div>`;
   }).join('');
@@ -561,8 +677,7 @@ async function enrichModIcons(container) {
       const iconEl = card.querySelector('.co-file-icon, .pp-content-icon');
       if (iconEl && !iconEl.querySelector('img')) {
         const fallbackLabel = (iconEl.textContent || 'MOD').trim();
-        iconEl.innerHTML = `<img src="${esc(iconUrl)}" alt="" width="24" height="24"
-          style="width:24px;height:24px;border-radius:6px;object-fit:cover;display:block">`;
+        iconEl.innerHTML = `<img src="${esc(iconUrl)}" alt="" class="mod-content-icon-img">`;
         iconEl.style.background = 'transparent';
         iconEl.style.padding = '0';
         const img = iconEl.querySelector('img');
@@ -705,7 +820,7 @@ async function openPackPage(pack) {
   packPageFiles = [];
   try {
     const files = await px.config.get('__instanceFiles__:' + pack.id);
-    if (Array.isArray(files)) packPageFiles = files;
+    if (Array.isArray(files)) packPageFiles = preprocessInstanceFiles(files);
   } catch {}
 
   // Check numeric names
@@ -749,6 +864,11 @@ function closePackPage() {
 $('pack-back').addEventListener('click', () => {
   closePackPage();
   loadLibrary();
+});
+
+$('pack-add-content').addEventListener('click', async () => {
+  if (!packPagePack) return;
+  await openBrowseForInstance(packPagePack);
 });
 
 // Tab navigation
@@ -859,7 +979,9 @@ function packRenderContent() {
   const search = ($('pack-content-search').value || '').toLowerCase().trim();
   const shown = packPageFiles.filter(f => {
     if (packPageFilter !== 'all' && f.type !== packPageFilter) return false;
-    if (search && !f.name.toLowerCase().includes(search) && !(f.filename || '').toLowerCase().includes(search)) return false;
+    const viewName = String(f.prettyName || f.name || '').toLowerCase();
+    const fileName = String(f.filename || '').toLowerCase();
+    if (search && !viewName.includes(search) && !fileName.includes(search)) return false;
     return true;
   });
 
@@ -887,12 +1009,12 @@ function packRenderContent() {
     const color = TYPE_COLORS_PP[f.type] || TYPE_COLORS_PP.other;
     const label = TYPE_LABELS_PP[f.type] || '?';
     const size = f.size ? formatBytes(f.size) : '';
-    const modAttr = f.type === 'mod' ? ` data-modname="${esc(f.name)}" data-modfile="${esc(f.filename||f.name)}"` : '';
+    const modAttr = f.type === 'mod' ? ` data-modname="${esc(f.prettyName||f.name)}" data-modfile="${esc(f.filename||f.name)}"` : '';
     return `<div class="pp-content-card"${modAttr}>
 <div class="pp-content-icon" style="background:${color}22;color:${color}">${label}</div>
-<div style="flex:1;min-width:0">
-<div class="pp-content-name" title="${esc(f.name)}">${esc(f.name)}</div>
-${f.filename && f.filename !== f.name ? `<div class="pp-content-meta">${esc(f.filename)}${size ? ' · ' + size : ''}</div>` : size ? `<div class="pp-content-meta">${size}</div>` : ''}
+<div class="pp-content-main">
+<div class="pp-content-name" title="${esc(f.prettyName||f.name)}">${esc(f.prettyName||f.name)}</div>
+${f.filename && f.filename !== (f.prettyName||f.name) ? `<div class="pp-content-meta">${esc(f.filename)}${size ? ' · ' + size : ''}</div>` : size ? `<div class="pp-content-meta">${size}</div>` : ''}
 </div></div>`;
   }).join('');
 
@@ -908,7 +1030,7 @@ $('pack-resolve-btn').addEventListener('click', async function() {
     this.textContent = result.resolved > 0 ? t('pack.content.resolve_done',{n:result.resolved}) : t('pack.content.resolve_uptodate');
     this.style.color = 'var(--green)'; this.style.borderColor = 'var(--green)';
     const files = await px.config.get('__instanceFiles__:' + packPagePack.id);
-    if (Array.isArray(files)) packPageFiles = files;
+    if (Array.isArray(files)) packPageFiles = preprocessInstanceFiles(files);
     packRenderContent();
     setTimeout(() => { $('pack-resolve-row').style.display = 'none'; }, 2000);
   } else {
@@ -1110,7 +1232,13 @@ $('pack-open-folder').addEventListener('click', () => {
 
 $('pack-delete-btn').addEventListener('click', async () => {
   if (!packPagePack) return;
-  if (!confirm(t('delete.confirm_full',{name:packPagePack.customName || packPagePack.name}))) return;
+  const ok=await showConfirmDialog({
+    title:t('dialog.confirm_title'),
+    message:t('delete.confirm_full',{name:packPagePack.customName || packPagePack.name}),
+    confirmText:t('dialog.delete'),
+    danger:true,
+  });
+  if(!ok)return;
   await px.library.delete(packPagePack.id);
   closePackPage();
   await loadLibrary();
@@ -1136,6 +1264,14 @@ async function refreshAuth(){
 }
 $('btn-login').addEventListener('click',async function(){
   this.disabled=true;this.innerHTML='<div class="spinner" style="width:18px;height:18px;border-width:2px;display:inline-block;vertical-align:middle;margin-right:8px"></div>'+t('auth.opening_browser');
+  const pendingHint = $('auth-pending-hint');
+  if (pendingHint) pendingHint.textContent = t('auth.browser_hint');
+  const copyBtn = $('btn-copy-device-code');
+  if (copyBtn) {
+    copyBtn.style.display = 'none';
+    copyBtn.dataset.code = '';
+    copyBtn.textContent = t('auth.copy_code');
+  }
   $('auth-pending-block').style.display='block';
   const result=await px.auth.login();
   this.disabled=false;this.innerHTML='<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" width="18" height="18"><path d="M3 10h14M10 4l6 6-6 6"/></svg> '+t('profile.btn.login');
@@ -1143,8 +1279,43 @@ $('btn-login').addEventListener('click',async function(){
   if(result.ok){await refreshAuth();showPage('library');}else notifyError(result.error);
 });
 px.on('auth:browser-opening',()=>{$('auth-pending-label').textContent=t('auth.browser_opened');});
+px.on('auth:device-code',(data={})=>{
+  const code = String(data.userCode || '').trim();
+  if (code) {
+    $('auth-pending-label').textContent = t('auth.device_code_label', { code });
+    const pendingHint = $('auth-pending-hint');
+    if (pendingHint) pendingHint.textContent = t('auth.device_code_hint');
+    const copyBtn = $('btn-copy-device-code');
+    if (copyBtn) {
+      copyBtn.style.display = 'inline-block';
+      copyBtn.dataset.code = code;
+      copyBtn.textContent = t('auth.copy_code');
+    }
+  }
+});
 px.on('auth:exchanging',()=>{$('auth-pending-label').textContent=t('auth.verifying_mc');});
-$('btn-logout').addEventListener('click',async function(){if(!confirm(t('auth.logout_confirm')))return;await px.auth.logout();await refreshAuth();});
+$('btn-copy-device-code').addEventListener('click',async function(){
+  const code = String(this.dataset.code || '').trim();
+  if (!code) return;
+  const ok = await copyToClipboard(code);
+  if (ok) {
+    this.textContent = '✓ ' + t('auth.copy_code');
+    notify(t('auth.code_copied'),'success',1800);
+    setTimeout(()=>{ this.textContent = t('auth.copy_code'); },1000);
+  } else {
+    notifyError(t('error.unknown'));
+  }
+});
+$('btn-logout').addEventListener('click',async function(){
+  const ok=await showConfirmDialog({
+    title:t('dialog.confirm_title'),
+    message:t('auth.logout_confirm'),
+    confirmText:t('profile.btn.logout'),
+  });
+  if(!ok)return;
+  await px.auth.logout();
+  await refreshAuth();
+});
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 let _systemRamGB = 0;
@@ -1375,7 +1546,137 @@ document.querySelectorAll('.lang-btn').forEach(btn=>{
 async function loadDataPath(){const p=await px.config.get('__dataPath__').catch(()=>null);if(p)$('data-path').textContent=p;}
 
 // ── Modrinth Browser ──────────────────────────────────────────────────────────
-const mrState={type:'modpack',page:0,limit:20,total:0,query:'',version:'',loader:'',sort:'relevance',firstLoad:true,loading:false};
+const mrState={type:'modpack',page:0,limit:20,total:0,query:'',version:'',loader:'',sort:'relevance',firstLoad:true,loading:false,targetInstanceId:'',installedByType:null,needsRefresh:false,reqSeq:0};
+
+function normalizeMrContentType(type){
+  const t = String(type || '').toLowerCase();
+  if (t === 'resource_pack') return 'resourcepack';
+  if (t === 'shaderpack') return 'shader';
+  return t;
+}
+function buildInstalledTypeIndex(files){
+  const mk = ()=>({ projectIds:new Set(), keys:new Set() });
+  const byType = { mod:mk(), shader:mk(), resourcepack:mk(), datapack:mk() };
+  (Array.isArray(files) ? files : []).forEach(f=>{
+    const t = normalizeMrContentType(f?.type);
+    if (!byType[t]) return;
+    const bucket = byType[t];
+    const pid = String(f?.modrinthProjectId || '').trim();
+    if (pid) bucket.projectIds.add(pid);
+    [f?.name, f?.prettyName, f?.filename, f?.modrinthSlug, f?.modrinthTitle].forEach(v=>{
+      const key = normalizeInstalledMatchKey(v);
+      if (key) bucket.keys.add(key);
+    });
+  });
+  return byType;
+}
+async function loadMrInstalledContentForTarget(packId){
+  if (!packId) {
+    mrState.installedByType = null;
+    return;
+  }
+  try {
+    const strict = await px.modrinth.getInstalledFiles(packId);
+    const files = Array.isArray(strict?.files) ? strict.files : await px.config.get('__instanceFiles__:'+packId);
+    const processed = preprocessInstanceFiles(files || []);
+    mrState.installedByType = buildInstalledTypeIndex(processed);
+  } catch {
+    mrState.installedByType = null;
+  }
+}
+function isMrHitAlreadyInstalled(hit){
+  if (!mrState.targetInstanceId || !mrState.installedByType) return false;
+  const type = normalizeMrContentType(hit?.project_type);
+  if (!['mod','shader','resourcepack','datapack'].includes(type)) return false;
+  const bucket = mrState.installedByType[type];
+  if (!bucket) return false;
+  const projectId = String(hit?.project_id || '').trim();
+  if (projectId) {
+    if (bucket.projectIds.has(projectId)) return true;
+    // Ultra-strict mode: when we have at least one indexed project id for this type,
+    // don't fallback to fuzzy name matching for mismatched ids.
+    if (bucket.projectIds.size > 0) return false;
+  }
+  const keys = [
+    normalizeInstalledMatchKey(hit?.title),
+    normalizeInstalledMatchKey(hit?.slug),
+  ].filter(Boolean);
+  return keys.some(k => bucket.keys.has(k));
+}
+function markMrContentInstalled(project, projectType, filename){
+  if (!mrState.targetInstanceId || !mrState.installedByType) return;
+  const t = normalizeMrContentType(projectType);
+  const bucket = mrState.installedByType[t];
+  if (!bucket) return;
+  const pid = String(project?.id || project?.project_id || '').trim();
+  if (pid) bucket.projectIds.add(pid);
+  [
+    project?.title,
+    project?.slug,
+    filename,
+    prettifyContentName(project?.title, filename, t),
+  ].forEach(v=>{
+    const key = normalizeInstalledMatchKey(v);
+    if (key) bucket.keys.add(key);
+  });
+}
+
+function mapInstanceLoaderToMrLoader(loader) {
+  const normalized = String(loader || '').toLowerCase();
+  return ['forge', 'neoforge', 'fabric', 'quilt'].includes(normalized) ? normalized : '';
+}
+
+function setMrType(type) {
+  mrState.type = type;
+  document.querySelectorAll('#mr-type-tabs [data-type]').forEach(b => {
+    b.classList.toggle('active', b.dataset.type === type);
+  });
+}
+
+function setMrSelectValue(selectId, value) {
+  const sel = $(selectId);
+  if (!sel) return;
+  const wanted = String(value || '');
+  if (!wanted) {
+    sel.value = '';
+    return;
+  }
+  const exists = Array.from(sel.options).some(o => o.value === wanted);
+  if (!exists) {
+    const opt = document.createElement('option');
+    opt.value = wanted;
+    opt.textContent = wanted;
+    sel.appendChild(opt);
+  }
+  sel.value = wanted;
+}
+
+async function openBrowseForInstance(pack) {
+  if (!pack) return;
+  const loaderFilter = mapInstanceLoaderToMrLoader(pack.modloader);
+  const targetType = loaderFilter ? 'mod' : 'resourcepack';
+
+  mrState.firstLoad = false;
+  showPage('browse');
+  mrState.targetInstanceId = pack.id || '';
+  mrState.query = '';
+  mrState.version = String(pack.mcVersion || '');
+  mrState.loader = loaderFilter;
+  mrState.page = 0;
+  mrState.installedByType = null;
+  const targetId = mrState.targetInstanceId;
+  loadMrInstalledContentForTarget(targetId).then(()=>{
+    if (mrState.targetInstanceId === targetId && $('page-browse')?.classList.contains('active')) {
+      mrSearch();
+    }
+  }).catch(()=>{});
+  setMrType(targetType);
+  const searchInput = $('mr-search');
+  if (searchInput) searchInput.value = '';
+  setMrSelectValue('mr-version-filter', mrState.version);
+  setMrSelectValue('mr-loader-filter', mrState.loader);
+  mrSearch();
+}
 
 // Load MC versions dynamically from Modrinth API
 async function loadMrVersions() {
@@ -1398,9 +1699,11 @@ async function loadMrVersions() {
 // Type tabs
 document.querySelectorAll('[data-type]').forEach(btn=>{
   btn.addEventListener('click',()=>{
-    document.querySelectorAll('[data-type]').forEach(b=>b.classList.remove('active'));
-    btn.classList.add('active');
-    mrState.type=btn.dataset.type;mrState.page=0;mrSearch();
+    setMrType(btn.dataset.type);
+    mrState.targetInstanceId = '';
+    mrState.installedByType = null;
+    mrState.page=0;
+    mrSearch();
   });
 });
 
@@ -1408,15 +1711,17 @@ document.querySelectorAll('[data-type]').forEach(btn=>{
 let mrSearchTimer=null;
 $('mr-search').addEventListener('input',function(){
   clearTimeout(mrSearchTimer);
-  mrSearchTimer=setTimeout(()=>{mrState.query=this.value;mrState.page=0;mrSearch();},400);
+  mrSearchTimer=setTimeout(()=>{mrState.query=this.value;mrState.page=0;mrSearch();},250);
 });
 $('mr-version-filter').addEventListener('change',function(){mrState.version=this.value;mrState.page=0;mrSearch();});
 $('mr-loader-filter').addEventListener('change',function(){mrState.loader=this.value;mrState.page=0;mrSearch();});
 $('mr-sort-filter').addEventListener('change',function(){mrState.sort=this.value;mrState.page=0;mrSearch();});
 
 async function mrSearch(){
-  if(mrState.loading)return;
+  if(mrState.loading){mrState.needsRefresh=true;return;}
   mrState.loading=true;
+  mrState.needsRefresh=false;
+  const reqId=++mrState.reqSeq;
   $('mr-loading').style.display='flex';$('mr-grid').innerHTML='';$('mr-empty').style.display='none';$('mr-pagination').style.display='none';
 
   const result=await px.modrinth.search({
@@ -1427,14 +1732,24 @@ async function mrSearch(){
     sort:mrState.sort,
   });
 
+  if(reqId!==mrState.reqSeq){mrState.loading=false;return;}
   mrState.loading=false;$('mr-loading').style.display='none';
 
-  if(result.error||!result.hits){$('mr-empty').style.display='block';return;}
+  if(result.error||!result.hits){
+    $('mr-empty').style.display='block';
+    if(mrState.needsRefresh){mrState.needsRefresh=false;mrSearch();}
+    return;
+  }
   mrState.total=result.total_hits||0;
 
-  if(result.hits.length===0){$('mr-empty').style.display='block';return;}
+  if(result.hits.length===0){
+    $('mr-empty').style.display='block';
+    if(mrState.needsRefresh){mrState.needsRefresh=false;mrSearch();}
+    return;
+  }
   renderMrGrid(result.hits);
   renderMrPagination();
+  if(mrState.needsRefresh){mrState.needsRefresh=false;mrSearch();}
 }
 
 function renderMrGrid(hits){
@@ -1448,16 +1763,26 @@ function renderMrGrid(hits){
   $('mr-grid').innerHTML=hits.map(h=>{
     const label=TYPE_LABELS[h.project_type]||h.project_type;
     const badgeCls=TYPE_BADGES[h.project_type]||'badge-modrinth';
+    const installed = isMrHitAlreadyInstalled(h);
+    const canQuickAdd = h.project_type !== 'modpack';
+    const quickAddBtn = canQuickAdd
+      ? `<button class="mr-card-add" data-mrquick="1" data-project-id="${esc(h.project_id||h.slug)}" data-project-type="${esc(h.project_type||'')}" data-project-title="${esc(h.title||'')}" data-installed="${installed?'1':'0'}" ${installed?'disabled':''} title="${esc(t('browse.quick_add_title'))}" aria-label="${esc(t('browse.quick_add_title'))}">
+<svg viewBox="0 0 14 14" fill="none"><path d="M7 3v8M3 7h8" stroke-linecap="round"/></svg>
+</button>`
+      : '';
     const iconHtml=h.icon_url
       ?`<img src="${esc(h.icon_url)}" alt="" loading="lazy" class="mr-icon-img">`
       :`<div style="width:56px;height:56px;border-radius:12px;background:linear-gradient(135deg,var(--violet),var(--cyan));display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:800;color:#fff;position:relative;z-index:2">${esc((h.title||'?')[0].toUpperCase())}</div>`;
     const bgStyle=h.icon_url?`style="background-image:url('${esc(h.icon_url)}')"` :'';
-    return `<div class="mr-card" data-project="${esc(h.project_id||h.slug)}">
+    return `<div class="mr-card ${installed?'mr-card-installed':''}" data-project="${esc(h.project_id||h.slug)}" data-installed="${installed?'1':'0'}">
 <div class="mr-card-img"><div class="mr-card-img-bg" ${bgStyle}></div>${iconHtml}</div>
 <div class="mr-card-body">
 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
 <div class="mr-card-name">${esc(h.title)}</div>
+<div class="mr-card-head-actions">
+${quickAddBtn}
 <span class="mr-badge ${badgeCls}">${label}</span>
+</div>
 </div>
 <div class="mr-card-desc">${esc(h.description||'')}</div>
 </div>
@@ -1474,9 +1799,79 @@ function renderMrGrid(hits){
     img.addEventListener('error',()=>{img.style.display='none';},{once:true});
   });
 
+  $('mr-grid').querySelectorAll('.mr-card-add[data-mrquick="1"]').forEach(btn=>{
+    btn.addEventListener('click',async(e)=>{
+      e.stopPropagation();
+      if (btn.dataset.installed === '1') return;
+      await quickAddFromMrCard(btn);
+    });
+  });
+
   $('mr-grid').querySelectorAll('[data-project]').forEach(card=>{
+    if (card.dataset.installed === '1') return;
     card.addEventListener('click',()=>openMrDetail(card.dataset.project));
   });
+}
+
+function pickPreferredMrVersion(versions, projectType) {
+  const list = (Array.isArray(versions) ? versions : []).filter(v => Array.isArray(v.files) && v.files.length > 0);
+  if (!list.length) return null;
+
+  const desiredMc = String(mrState.version || '');
+  const desiredLoader = String(mrState.loader || '').toLowerCase();
+  const loaderAgnostic = isLoaderAgnosticType(projectType);
+
+  const scored = list.map(v => {
+    let score = 0;
+    const mcVersions = (v.game_versions || []).map(String);
+    const loaders = (v.loaders || []).map(l => String(l).toLowerCase());
+    const vType = String(v.version_type || '').toLowerCase();
+
+    if (desiredMc) score += mcVersions.includes(desiredMc) ? 1000 : -220;
+    if (desiredLoader && !loaderAgnostic) score += loaders.includes(desiredLoader) ? 500 : -140;
+    if (vType === 'release') score += 60;
+    else if (vType === 'beta') score += 30;
+    else if (vType === 'alpha') score += 10;
+    if (v.featured) score += 15;
+    if (mcVersions.length) score += Math.min(mcVersions.length, 3);
+
+    const dateScore = Date.parse(v.date_published || v.date_modified || 0);
+    if (Number.isFinite(dateScore)) score += dateScore / 1e13;
+
+    return { v, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0]?.v || null;
+}
+
+async function quickAddFromMrCard(btn) {
+  if (!btn || btn.disabled) return;
+  if (btn.dataset.installed === '1') return;
+  const projectId = btn.dataset.projectId;
+  const projectType = String(btn.dataset.projectType || '').toLowerCase();
+  const projectTitle = btn.dataset.projectTitle || projectId || '';
+  if (!projectId || !projectType || projectType === 'modpack') return;
+
+  btn.disabled = true;
+  btn.classList.add('loading');
+  const versions = await px.modrinth.getVersions(projectId).catch(() => null);
+  btn.classList.remove('loading');
+  btn.disabled = false;
+
+  const selectedVersion = pickPreferredMrVersion(versions, projectType);
+  if (!selectedVersion) {
+    notify(t('mr.no_versions'),'error',2600);
+    return;
+  }
+
+  await handleContentDownload(
+    btn,
+    { id: projectId, title: projectTitle, project_type: projectType },
+    selectedVersion,
+    projectType,
+    { compactButton: true, preferredInstanceId: mrState.targetInstanceId || '' }
+  );
 }
 
 function renderMrPagination(){
@@ -1721,9 +2116,11 @@ function isVersionCompatible(entry, versionObj, projectType) {
   return { ok: true };
 }
 
-async function handleContentDownload(btn, project, versionObj, projectType) {
+async function handleContentDownload(btn, project, versionObj, projectType, options = {}) {
   const typeLabel = t(CONTENT_LABEL[projectType] || 'inst_pick.type.file');
   const subdir    = CONTENT_SUBDIR[projectType] || 'mods';
+  const preferredInstanceId = String(options.preferredInstanceId || '');
+  const compactButton = !!options.compactButton;
   const instances = await px.library.list();
 
   if (!instances.length) {
@@ -1737,8 +2134,15 @@ async function handleContentDownload(btn, project, versionObj, projectType) {
     compat: isVersionCompatible(inst, versionObj, projectType),
   }));
 
-  const compatible   = annotated.filter(i => i.compat.ok);
+  let compatible   = annotated.filter(i => i.compat.ok);
   const incompatible = annotated.filter(i => !i.compat.ok);
+  if (preferredInstanceId && compatible.length > 1) {
+    compatible = compatible.sort((a, b) => {
+      const aPref = a.id === preferredInstanceId ? 1 : 0;
+      const bPref = b.id === preferredInstanceId ? 1 : 0;
+      return bPref - aPref;
+    });
+  }
 
   // Show picker modal
   $('inst-pick-title').textContent = t('inst_pick.install_title');
@@ -1772,6 +2176,9 @@ async function handleContentDownload(btn, project, versionObj, projectType) {
       const incompClass = compat.ok ? '' : ' inst-pick-incompatible';
       const reasonTag   = compat.ok ? '' :
         `<span style="font-size:10px;color:var(--text2);margin-left:auto;flex-shrink:0">${esc(compat.reason)}</span>`;
+      const currentTag = (compat.ok && preferredInstanceId && inst.id === preferredInstanceId)
+        ? `<span style="font-size:10px;color:var(--cyan);margin-left:auto;flex-shrink:0">${t('inst_pick.current_instance')}</span>`
+        : '';
 
       return `<div class="inst-pick-card${incompClass}" data-id="${esc(inst.id)}" data-compat="${compat.ok}" data-gamedir="${esc(inst.gameDir)}" data-subdir="${subdir}">
   ${iconHtml}
@@ -1779,7 +2186,7 @@ async function handleContentDownload(btn, project, versionObj, projectType) {
     <div class="inst-pick-name">${esc(inst.customName||inst.name)}</div>
     <div class="inst-pick-meta">MC ${esc(inst.mcVersion)} · ${esc(formatLoaderWithVersion(inst.modloader,inst.modloaderVersion))}</div>
   </div>
-  ${reasonTag}
+  ${currentTag || reasonTag}
   <span class="inst-pick-badge" style="background:${lbg};color:${ltxt}">${esc(lname)}</span>
 </div>`;
     };
@@ -1802,26 +2209,48 @@ async function handleContentDownload(btn, project, versionObj, projectType) {
 
       // Mark the original button as downloading
       btn.disabled = true;
-      btn.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:2px;display:inline-block"></div>';
+      if (compactButton) {
+        btn.classList.add('loading');
+      } else {
+        btn.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:2px;display:inline-block"></div>';
+      }
 
       const destDir = card.dataset.gamedir + '/' + card.dataset.subdir;
-      const instName = allPacks.find(p => p.id === card.dataset.id)?.name || card.dataset.id;
+      const selectedPack = allPacks.find(p => p.id === card.dataset.id);
+      const instName = selectedPack?.customName || selectedPack?.name || card.dataset.id;
+      const effectiveProjectId = project?.id || btn.dataset.pid;
+      const effectiveVersionId = versionObj?.id || btn.dataset.vid;
+      const effectiveFileName = versionObj?.files?.[0]?.filename || btn.dataset.fname || 'download';
 
       const result = await px.modrinth.download({
-        projectId: btn.dataset.pid,
-        versionId: btn.dataset.vid,
-        fileName:  btn.dataset.fname,
+        projectId: effectiveProjectId,
+        versionId: effectiveVersionId,
+        fileName:  effectiveFileName,
         destDir,
       });
 
       if (result.ok) {
-        btn.innerHTML = `${t('mr.downloaded')} → ${esc(instName)}`;
-        btn.style.background = 'var(--green)';
-        btn.style.fontSize   = '11px';
+        markMrContentInstalled(project, projectType, effectiveFileName);
+        if (compactButton) {
+          btn.classList.remove('loading');
+          btn.disabled = true;
+          btn.dataset.installed = '1';
+          btn.closest('.mr-card')?.classList.add('mr-card-installed');
+          btn.closest('.mr-card')?.setAttribute('data-installed','1');
+          notify(t('browse.quick_add_done', { instance: instName }), 'success', 2400);
+        } else {
+          btn.innerHTML = `${t('mr.downloaded')} → ${esc(instName)}`;
+          btn.style.background = 'var(--green)';
+          btn.style.fontSize   = '11px';
+        }
         await loadLibrary();
       } else {
         btn.disabled = false;
-        btn.innerHTML = '<svg viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6l3 3 3-3" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 11h10" stroke-linecap="round"/></svg> '+t('mr.retry');
+        if (compactButton) {
+          btn.classList.remove('loading');
+        } else {
+          btn.innerHTML = '<svg viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6l3 3 3-3" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 11h10" stroke-linecap="round"/></svg> '+t('mr.retry');
+        }
         notifyError(result.error);
       }
     });
@@ -1834,6 +2263,13 @@ $('inst-pick-close').addEventListener('click',()=>{$('inst-pick-overlay').style.
 $('inst-pick-cancel').addEventListener('click',()=>{$('inst-pick-overlay').style.display='none';});
 $('inst-pick-overlay').addEventListener('click',e=>{if(e.target===$('inst-pick-overlay'))$('inst-pick-overlay').style.display='none';});
 $('modal-overlay').addEventListener('click',e=>{if(e.target===$('modal-overlay'))$('modal-overlay').style.display='none';});
+$('confirm-ok')?.addEventListener('click',()=>closeConfirmDialog(true));
+$('confirm-cancel')?.addEventListener('click',()=>closeConfirmDialog(false));
+$('confirm-close')?.addEventListener('click',()=>closeConfirmDialog(false));
+$('confirm-overlay')?.addEventListener('click',e=>{if(e.target===$('confirm-overlay'))closeConfirmDialog(false);});
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape' && $('confirm-overlay')?.style.display==='flex') closeConfirmDialog(false);
+});
 
 // ── IPC ───────────────────────────────────────────────────────────────────────
 px.on('install:progress',({step,pct,detail})=>updateStep(step,pct,detail));
