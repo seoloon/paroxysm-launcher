@@ -1,7 +1,7 @@
 # Paroxysm Launcher
 
 <p align="center">
-  <img src="assets/logo_bckg.png" alt="Paroxysm Launcher Logo" width="96" />
+  <img src="assets/icon.png" alt="Paroxysm Launcher Logo" width="96" />
 </p>
 
 <p align="center">
