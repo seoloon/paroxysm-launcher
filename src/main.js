@@ -340,7 +340,8 @@ function setupAutoUpdater() {
 
   if (!autoUpdater) {
     updaterReady = false;
-    const loadErr = autoUpdaterLoadError?.message ? ` (${autoUpdaterLoadError.message})` : '';
+    const loadErrMsg = autoUpdaterLoadError && autoUpdaterLoadError.message ? autoUpdaterLoadError.message : '';
+    const loadErr = loadErrMsg ? ` (${loadErrMsg})` : '';
     setUpdaterState({
       available: false,
       enabled: false,
@@ -912,7 +913,7 @@ ipcMain.handle('modrinth:get-game-versions', async () => {
   } catch(e) { return { error: e.message }; }
 });
 
-ipcMain.handle('modrinth:download', async (_, { projectId, versionId, fileName, destDir }) => {
+ipcMain.handle('modrinth:download', async (_, { versionId, fileName, destDir }) => {
   try {
     const versions = await modrinthFetch(`${MODRINTH_API}/version/${versionId}`);
     const file = versions.files?.find(f => f.primary) || versions.files?.[0];
@@ -1394,7 +1395,7 @@ ipcMain.handle('instance:create', async (_, { name, mcVersion, loader, loaderVer
 });
 
 // ── Modpack icon fetch ────────────────────────────────────────────────────────
-ipcMain.handle('modpack:fetch-icon', async (_, { format, name }) => {
+ipcMain.handle('modpack:fetch-icon', async (_, { name }) => {
   try {
     const q = encodeURIComponent(name);
     const data = await modrinthFetch(`${MODRINTH_API}/search?query=${q}&facets=${encodeURIComponent(JSON.stringify([["project_type:modpack"]]))}&limit=5`);

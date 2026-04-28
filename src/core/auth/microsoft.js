@@ -199,14 +199,13 @@ class MicrosoftAuth {
   async startLogin() {
     const state = crypto.randomBytes(16).toString('hex');
 
-    const code = await Promise.race([
+    return await Promise.race([
       this._waitForCallback(state),
       new Promise((_, reject) =>
         setTimeout(() => reject(new Error('Timeout : connexion non complétée en 5 minutes')), 5 * 60 * 1000)
       ),
     ]);
 
-    return code;
   }
 
   // ── Serveur HTTP local pour recevoir le callback ──────────────────────────
@@ -234,13 +233,13 @@ class MicrosoftAuth {
 
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         if (error) {
-          res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Erreur</title>
+          res.end(`<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><title>Erreur</title>
 <style>body{font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#020617;color:#EF4444}.box{text-align:center;padding:40px}</style></head>
 <body><div class="box"><h2>❌ Erreur de connexion</h2><p>${errorDesc || error}</p>
 <p style="color:#94A3B8;margin-top:20px">Vous pouvez fermer cette fenêtre.</p></div></body></html>`);
         } else {
           // Auto-close the tab after 2 s — user is already back in the launcher
-          res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Connecté</title>
+          res.end(`<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><title>Connecté</title>
 <style>body{font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#020617;color:#22C55E}.box{text-align:center;padding:40px}</style></head>
 <body><div class="box"><h2>✓ Connexion réussie !</h2>
 <p style="color:#E2E8F0">Vous pouvez fermer cette fenêtre et retourner sur le launcher.</p>

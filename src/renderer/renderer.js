@@ -533,15 +533,6 @@ document.querySelectorAll('.pp-filter-btn').forEach(btn=>{
 $('pp-file-search').addEventListener('input',()=>ppRenderFiles());
 
 // Catégoriser un fichier par extension/dossier
-function ppCategorizeFile(name, dir){
-  const n=name.toLowerCase(), d=(dir||'').toLowerCase();
-  if(d.includes('shader')||n.endsWith('.vsh')||n.endsWith('.fsh')||n.endsWith('.glsl'))return'shader';
-  if(d.includes('resourcepack')||d.includes('resource_pack')||d.includes('texturepacks'))return'resourcepack';
-  if(d.includes('config')||n.endsWith('.cfg')||n.endsWith('.toml')||n.endsWith('.json')&&d.includes('config'))return'config';
-  if(n.endsWith('.jar'))return'mod';
-  return'other';
-}
-
 const TYPE_COLORS={mod:'#8B5CF6',shader:'#F59E0B',resourcepack:'#3B82F6',config:'#64748B',other:'#334155'};
 const TYPE_LABELS={mod:'MOD',shader:'SHD',resourcepack:'RES',config:'CFG',other:'?'};
 
@@ -1171,7 +1162,7 @@ $('pack-icon-pick').addEventListener('click', () => {
     reader.onload = ev => {
       packIconDataPending = ev.target.result;
       const preview = $('pack-settings-icon');
-      preview.innerHTML = `<img src="${packIconDataPending}" style="width:80px;height:80px;border-radius:14px;object-fit:cover">`;
+      preview.innerHTML = `<img src="${packIconDataPending}" alt="" style="width:80px;height:80px;border-radius:14px;object-fit:cover">`;
     };
     reader.readAsDataURL(file);
   };
@@ -1187,7 +1178,7 @@ function updatePackIconPreview(pack) {
   const preview = $('pack-settings-icon');
   const src = packIconDataPending || pack.iconData;
   if (src) {
-    preview.innerHTML = `<img src="${src}" style="width:80px;height:80px;border-radius:14px;object-fit:cover">`;
+    preview.innerHTML = `<img src="${src}" alt="" style="width:80px;height:80px;border-radius:14px;object-fit:cover">`;
   } else {
     preview.textContent = (pack.customName || pack.name || '?')[0].toUpperCase();
   }
@@ -1417,8 +1408,7 @@ async function loadSettings(){
   try {
     const info = await px.system.ram();
     _systemRamGB = info.totalGB;
-    const maxSlider = Math.max(4, Math.floor(_systemRamGB));
-    $('inp-ram').max = maxSlider;
+    $('inp-ram').max = Math.max(4, Math.floor(_systemRamGB));
     $('ram-system-info').textContent = t('settings.ram_system',{n:_systemRamGB});
     const packRamInput = $('pack-ram');
     if (packRamInput) {
@@ -2155,7 +2145,7 @@ async function handleContentDownload(btn, project, versionObj, projectType, opti
       const ltxt = loaderText[lc]    || 'var(--text2)';
       const lname= getLoaderDisplayName(inst.modloader);
       const iconHtml = inst.iconData
-        ? `<img src="${esc(inst.iconData)}" style="width:38px;height:38px;border-radius:10px;object-fit:cover">`
+        ? `<img src="${esc(inst.iconData)}" alt="" style="width:38px;height:38px;border-radius:10px;object-fit:cover">`
         : `<div class="inst-pick-icon" style="background:${lbg};color:${ltxt}">${esc((inst.name||'?').substring(0,2).toUpperCase())}</div>`;
 
       const incompClass = compat.ok ? '' : ' inst-pick-incompatible';
