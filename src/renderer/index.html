@@ -242,6 +242,8 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
 .pp-hero-name{font-size:26px;font-weight:800;letter-spacing:-.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 2px 8px rgba(0,0,0,.5)}
 .pp-hero-sub{font-size:13px;color:var(--text1);margin-top:4px;font-family:var(--mono)}
 .pp-hero-actions{display:flex;gap:8px;flex-shrink:0}
+.pp-hero-actions .btn-secondary{padding:10px 14px;font-size:13px;gap:7px}
+.pp-hero-actions .btn-secondary svg{width:14px;height:14px}
 .pp-hero-back{width:36px;height:36px;border-radius:var(--r-sm);border:1px solid rgba(255,255,255,.15);background:rgba(2,6,23,.6);backdrop-filter:blur(8px);color:var(--text1);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;position:absolute;top:16px;left:16px;z-index:3}
 .pp-hero-back:hover{background:rgba(255,255,255,.1);color:var(--text0)}
 .pp-nav{display:flex;gap:0;padding:0 36px;border-bottom:1px solid var(--border);background:var(--bg0);flex-shrink:0}
@@ -264,11 +266,13 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
 .pp-game-log{background:#000;border:1px solid var(--border);border-radius:var(--r-md);padding:12px;font-family:var(--mono);font-size:11px;color:var(--text1);height:180px;overflow-y:auto;line-height:1.6;-webkit-user-select:text;user-select:text;display:none}
 /* Content tab */
 .pp-content-toolbar{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center}
-.pp-content-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px}
-.pp-content-card{display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--bg1);border:1px solid var(--border);border-radius:var(--r-md);transition:border-color .15s}
+.pp-content-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.pp-content-card{display:flex;align-items:center;gap:12px;padding:14px 16px;min-height:94px;background:var(--bg1);border:1px solid var(--border);border-radius:var(--r-md);transition:border-color .15s}
 .pp-content-card:hover{border-color:var(--violet)}
-.pp-content-icon{width:36px;height:36px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;letter-spacing:.3px}
-.pp-content-name{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;-webkit-user-select:text;user-select:text}
+.pp-content-icon{width:46px;height:46px;border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;letter-spacing:.3px}
+.pp-content-icon .mod-content-icon-img{width:100%;height:100%;border-radius:inherit;object-fit:cover;display:block}
+.pp-content-main{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:3px}
+.pp-content-name{font-size:14px;font-weight:650;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;-webkit-user-select:text;user-select:text}
 .pp-content-meta{font-size:11px;color:var(--text2);font-family:var(--mono);margin-top:2px}
 /* Logs tab */
 .pp-log-files{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
@@ -311,10 +315,11 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
 .co-toolbar{display:flex;align-items:center;gap:8px;padding-bottom:14px;flex-wrap:wrap}
 .co-body{flex:1;overflow-y:auto;padding:20px 32px 32px}
 .co-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
-.co-file-card{display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--bg1);border:1px solid var(--border);border-radius:var(--r-md);transition:border-color .15s;cursor:default}
+.co-file-card{display:flex;align-items:center;gap:12px;padding:13px 14px;min-height:86px;background:var(--bg1);border:1px solid var(--border);border-radius:var(--r-md);transition:border-color .15s;cursor:default}
 .co-file-card:hover{border-color:var(--violet)}
-.co-file-icon{width:36px;height:36px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;letter-spacing:.5px}
-.co-file-info{flex:1;min-width:0}
+.co-file-icon{width:46px;height:46px;border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;letter-spacing:.5px}
+.co-file-icon .mod-content-icon-img{width:100%;height:100%;border-radius:inherit;object-fit:cover;display:block}
+.co-file-info{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:3px}
 .co-file-name{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;-webkit-user-select:text;user-select:text}
 .co-file-meta{font-size:11px;color:var(--text2);font-family:var(--mono);margin-top:2px}
 .co-stats{display:flex;gap:16px;padding:12px 0 16px;border-bottom:1px solid var(--border);margin-bottom:16px;flex-wrap:wrap}
@@ -338,6 +343,8 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
 .mr-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
 .mr-card{background:var(--bg1);border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden;cursor:pointer;transition:all .25s cubic-bezier(.2,.8,.2,1);display:flex;flex-direction:column;}
 .mr-card:hover{border-color:var(--cyan);transform:translateY(-4px);box-shadow:0 8px 30px rgba(0,0,0,.4),0 0 15px rgba(34,211,238,.12)}
+.mr-card.mr-card-installed{opacity:.58;filter:saturate(.55);cursor:default}
+.mr-card.mr-card-installed:hover{border-color:var(--border);transform:none;box-shadow:none}
 .mr-card-img{height:72px;background:var(--bg2);position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center}
 .mr-card-img img{width:56px;height:56px;border-radius:12px;object-fit:cover;position:relative;z-index:2;box-shadow:0 4px 12px rgba(0,0,0,.4)}
 .mr-card-img-bg{position:absolute;inset:0;opacity:.15;filter:blur(16px);background-size:cover;background-position:center}
@@ -348,6 +355,14 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
 .mr-card-stats{display:flex;gap:12px;font-size:11px;color:var(--text2);font-weight:500}
 .mr-card-stat{display:flex;align-items:center;gap:4px}
 .mr-card-stat svg{width:12px;height:12px;stroke:currentColor}
+.mr-card-head-actions{display:flex;align-items:center;gap:8px;margin-left:8px}
+.mr-card-add{width:24px;height:24px;border-radius:8px;border:1px solid rgba(34,211,238,.28);background:rgba(34,211,238,.08);color:var(--cyan);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:all .16s;flex-shrink:0;position:relative}
+.mr-card-add:hover{background:rgba(34,211,238,.18);border-color:var(--cyan);box-shadow:0 0 12px rgba(34,211,238,.2)}
+.mr-card-add svg{width:13px;height:13px;stroke:currentColor;stroke-width:2}
+.mr-card-add.loading{pointer-events:none;opacity:.85}
+.mr-card-add.loading svg{opacity:0}
+.mr-card-add.loading::after{content:'';position:absolute;width:12px;height:12px;border:2px solid rgba(34,211,238,.26);border-top-color:var(--cyan);border-radius:50%;animation:spin .7s linear infinite}
+.mr-card.mr-card-installed .mr-card-add{opacity:.5;border-color:rgba(148,163,184,.28);background:rgba(148,163,184,.08);color:var(--text2);cursor:not-allowed}
 .mr-badge{padding:3px 8px;border-radius:10px;font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase}
 .mr-pagination{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:28px}
 .mr-page-btn{width:36px;height:36px;border-radius:var(--r-sm);border:1px solid var(--border);background:transparent;color:var(--text1);font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;display:flex;align-items:center;justify-content:center;}
@@ -410,6 +425,22 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
 .toast.is-closing{animation:toastOut var(--dur-fast) ease forwards}
 @keyframes toastIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 @keyframes toastOut{from{opacity:1;transform:none}to{opacity:0;transform:translateY(6px)}}
+
+/* Confirm dialog (replaces native confirm boxes) */
+.confirm-modal{background:var(--bg1);border:1px solid var(--border-hi);border-radius:var(--r-lg);width:460px;max-width:calc(100vw - 40px);box-shadow:0 25px 80px rgba(0,0,0,.8);overflow:hidden;animation:slideUp .2s cubic-bezier(0.16,1,.3,1)}
+.confirm-head{padding:18px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:12px;background:linear-gradient(to right,rgba(34,211,238,.05),transparent)}
+.confirm-title{font-size:16px;font-weight:700}
+.confirm-close{width:30px;height:30px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--text1);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s}
+.confirm-close:hover{background:rgba(255,255,255,.08);color:var(--text0)}
+.confirm-body{padding:18px 22px}
+.confirm-msg{font-size:13px;line-height:1.6;color:var(--text1);-webkit-user-select:text;user-select:text}
+.confirm-actions{padding:0 22px 18px;display:flex;justify-content:flex-end;gap:10px}
+.btn-confirm-danger{border:1px solid rgba(244,63,94,.35)!important;background:linear-gradient(135deg,rgba(244,63,94,.92),rgba(190,24,93,.92))!important;box-shadow:0 8px 24px rgba(244,63,94,.2)!important}
+.btn-confirm-danger:hover{box-shadow:0 12px 30px rgba(244,63,94,.28)!important}
+
+@media (max-width: 1100px){
+  .pp-content-grid{grid-template-columns:1fr}
+}
 
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{animation:none!important;transition:none!important}
@@ -580,7 +611,8 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
               <p><span data-i18n="auth.required">Requis pour jouer sur les serveurs officiels et les Realms.</span></p>
               <div id="auth-pending-block" style="display:none" class="auth-pending-block">
                 <div class="auth-pending-label" id="auth-pending-label"><span data-i18n="auth.opening_browser">Ouverture du navigateur...</span></div>
-                <div class="auth-pending-hint"><span data-i18n="auth.browser_hint">Connectez-vous dans votre navigateur puis revenez ici.</span></div>
+                <div class="auth-pending-hint" id="auth-pending-hint"><span data-i18n="auth.browser_hint">Connectez-vous dans votre navigateur puis revenez ici.</span></div>
+                <button class="btn-ghost" id="btn-copy-device-code" style="display:none;margin:0 auto 12px" data-i18n="auth.copy_code">Copier le code</button>
                 <div class="spinner"></div>
               </div>
               <button class="btn-primary" id="btn-login" style="width:100%;justify-content:center">
@@ -696,6 +728,10 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
         <div class="pp-hero-sub" id="pack-hero-sub"></div>
       </div>
       <div class="pp-hero-actions">
+        <button class="btn-secondary" id="pack-add-content" data-i18n-title="pack.add_content_title" title="Ajouter du contenu">
+          <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 3v8M3 7h8" stroke-linecap="round"/></svg>
+          <span data-i18n="pack.add_content">Ajouter du contenu</span>
+        </button>
         <button class="btn-primary" id="pack-play-hero" style="padding:10px 22px;font-size:14px">
           <svg viewBox="0 0 20 20" fill="currentColor" width="18" height="18"><path d="M6 4l12 6-12 6z"/></svg>
           <span data-i18n="pack.play">JOUER</span>
@@ -1053,6 +1089,22 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
 </div>
 
 <div id="toast-root" aria-live="polite" aria-atomic="true"></div>
+
+<div id="confirm-overlay" class="modal-overlay" style="display:none">
+  <div class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-msg">
+    <div class="confirm-head">
+      <div class="confirm-title" id="confirm-title" data-i18n="dialog.confirm_title">Confirmation</div>
+      <button class="confirm-close" id="confirm-close" aria-label="Close">✕</button>
+    </div>
+    <div class="confirm-body">
+      <div class="confirm-msg" id="confirm-msg"></div>
+    </div>
+    <div class="confirm-actions">
+      <button class="btn-ghost" id="confirm-cancel" data-i18n="dialog.cancel">Annuler</button>
+      <button class="btn-primary" id="confirm-ok" data-i18n="dialog.confirm">Confirmer</button>
+    </div>
+  </div>
+</div>
 
 
 <script src="./i18n.js"></script>
