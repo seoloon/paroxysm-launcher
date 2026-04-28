@@ -105,6 +105,97 @@ class MicrosoftAuth {
   }
 
   // ── Démarrer le flux d'auth ───────────────────────────────────────────────
+  async startLoginDeviceCode(onUpdate = null) {
+    const device = await this._requestDeviceCode();
+    if (typeof onUpdate === 'function') {
+      onUpdate({
+        userCode: device.user_code,
+        verificationUri: device.verification_uri,
+        verificationUriComplete: device.verification_uri_complete,
+        expiresIn: device.expires_in,
+        interval: device.interval,
+        message: device.message,
+      });
+    }
+
+    const openUrl = device.verification_uri_complete || device.verification_uri;
+    if (openUrl) {
+      try { await shell.openExternal(openUrl); } catch {}
+    }
+
+    return await this._pollDeviceCodeToken(device);
+  }
+
+  async _requestDeviceCode() {
+    const res = await fetch(`${MS_AUTH_BASE}/devicecode`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: CLIENT_ID,
+        scope: SCOPE,
+      }),
+    });
+
+    const text = await res.text();
+    let data;
+    try { data = JSON.parse(text); }
+    catch { throw new Error(`Reponse device code invalide (${res.status})`); }
+
+    if (!res.ok || data.error) {
+      throw new Error(`Device code refuse (${res.status}): ${data.error_description || data.error || 'unknown_error'}`);
+    }
+    if (!data.device_code || !data.user_code) {
+      throw new Error('Reponse device code incomplete');
+    }
+    return data;
+  }
+
+  async _pollDeviceCodeToken(deviceData) {
+    const startedAt = Date.now();
+    const expiresAt = startedAt + (Number(deviceData.expires_in || 900) * 1000);
+    let intervalMs = Math.max(2, Number(deviceData.interval || 5)) * 1000;
+
+    while (Date.now() < expiresAt) {
+      await new Promise(r => setTimeout(r, intervalMs));
+
+      const res = await fetch(`${MS_AUTH_BASE}/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+          client_id: CLIENT_ID,
+          device_code: deviceData.device_code,
+        }),
+      });
+
+      const text = await res.text();
+      let data = {};
+      try { data = JSON.parse(text); } catch {}
+
+      if (res.ok && data.access_token) {
+        return {
+          accessToken: data.access_token,
+          refreshToken: data.refresh_token,
+          expiresIn: data.expires_in,
+        };
+      }
+
+      const err = String(data.error || '').toLowerCase();
+      if (err === 'authorization_pending') continue;
+      if (err === 'slow_down') {
+        intervalMs += 1000;
+        continue;
+      }
+      if (err === 'authorization_declined') throw new Error('Connexion annulee dans le navigateur.');
+      if (err === 'expired_token') throw new Error('Le code de connexion a expire. Reessaie.');
+      if (err === 'bad_verification_code') throw new Error('Code de verification invalide.');
+
+      throw new Error(`Echec du device flow (${res.status}): ${data.error_description || data.error || 'unknown_error'}`);
+    }
+
+    throw new Error('Timeout: la connexion Microsoft a expire.');
+  }
+
   async startLogin() {
     const state = crypto.randomBytes(16).toString('hex');
 
