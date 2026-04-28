@@ -60,6 +60,8 @@ const TRANSLATIONS = {
     'browse.type_label.mod':    'Mod',
     'browse.type_label.shader': 'Shader',
     'browse.type_label.resourcepack': 'Pack de ressources',
+    'browse.quick_add_title':   'Installer dans une instance',
+    'browse.quick_add_done':    'Ajouté dans {{instance}}',
 
     // Profile page
     'profile.title':              'Profil',
@@ -81,8 +83,16 @@ const TRANSLATIONS = {
     'auth.not_connected':         'Non connecté',
     'auth.logging_in':            'Connexion en cours...',
     'auth.browser_opened':        'Navigateur ouvert — connectez-vous puis revenez ici.',
+    'auth.device_code_label':     'Code Microsoft : {{code}}',
+    'auth.device_code_hint':      'Si nécessaire, entrez ce code sur microsoft.com/devicelogin.',
+    'auth.copy_code':             'Copier le code',
+    'auth.code_copied':           'Code copié dans le presse-papiers.',
     'auth.verifying_mc':          'Vérification du compte Minecraft...',
     'auth.logout_confirm':        'Se déconnecter ?',
+    'dialog.confirm_title':       'Confirmation',
+    'dialog.cancel':              'Annuler',
+    'dialog.confirm':             'Confirmer',
+    'dialog.delete':              'Supprimer',
 
     // Settings page
     'settings.title':              'Paramètres',
@@ -122,6 +132,8 @@ const TRANSLATIONS = {
 
     // Pack page — hero
     'pack.play':      'JOUER',
+    'pack.add_content':'Ajouter du contenu',
+    'pack.add_content_title':'Ouvrir l\'explorer avec les filtres de cette instance',
     'pack.kill':      'KILL INSTANCE',
     'pack.killing':   'ARRÊT...',
     'pack.play_verb': 'Jouer',
@@ -271,6 +283,7 @@ const TRANSLATIONS = {
     'inst_pick.empty_hint': 'Vérifiez la version MC et le modloader.',
     'inst_pick.install_title': 'Installer dans une instance',
     'inst_pick.install_where': 'Où souhaitez-vous installer ce {{type}} ?',
+    'inst_pick.current_instance':'Instance actuelle',
     'inst_pick.incompatible':  'Incompatibles',
     'inst_pick.version_unknown':'Version inconnue',
     'inst_pick.require_mc':    'MC {{versions}} requis',
@@ -352,6 +365,8 @@ const TRANSLATIONS = {
     'browse.type_label.mod':    'Mod',
     'browse.type_label.shader': 'Shader',
     'browse.type_label.resourcepack': 'Resource Pack',
+    'browse.quick_add_title':   'Install to an instance',
+    'browse.quick_add_done':    'Added to {{instance}}',
 
     // Profile page
     'profile.title':              'Profile',
@@ -373,8 +388,16 @@ const TRANSLATIONS = {
     'auth.not_connected':         'Not signed in',
     'auth.logging_in':            'Signing in...',
     'auth.browser_opened':        'Browser opened — sign in and come back here.',
+    'auth.device_code_label':     'Microsoft code: {{code}}',
+    'auth.device_code_hint':      'If needed, enter this code on microsoft.com/devicelogin.',
+    'auth.copy_code':             'Copy code',
+    'auth.code_copied':           'Code copied to clipboard.',
     'auth.verifying_mc':          'Verifying Minecraft account...',
     'auth.logout_confirm':        'Sign out?',
+    'dialog.confirm_title':       'Confirmation',
+    'dialog.cancel':              'Cancel',
+    'dialog.confirm':             'Confirm',
+    'dialog.delete':              'Delete',
 
     // Settings page
     'settings.title':              'Settings',
@@ -414,6 +437,8 @@ const TRANSLATIONS = {
 
     // Pack page — hero
     'pack.play':      'PLAY',
+    'pack.add_content':'Add content',
+    'pack.add_content_title':'Open browser with this instance filters',
     'pack.kill':      'KILL INSTANCE',
     'pack.killing':   'STOPPING...',
     'pack.play_verb': 'Play',
@@ -563,6 +588,7 @@ const TRANSLATIONS = {
     'inst_pick.empty_hint': 'Check the MC version and modloader.',
     'inst_pick.install_title': 'Install to an instance',
     'inst_pick.install_where': 'Where do you want to install this {{type}}?',
+    'inst_pick.current_instance':'Current instance',
     'inst_pick.incompatible':  'Incompatible',
     'inst_pick.version_unknown':'Unknown version',
     'inst_pick.require_mc':    'MC {{versions}} required',
