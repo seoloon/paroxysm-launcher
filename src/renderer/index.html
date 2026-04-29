@@ -218,7 +218,8 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
 .play-panel.closing{animation:slideOutRight .4s cubic-bezier(0.16,1,.3,1) forwards;pointer-events:none}
 @keyframes slideInRight{from{transform:translateX(100%);opacity:0}to{transform:none;opacity:1}}
 @keyframes slideOutRight{from{transform:none;opacity:1}to{transform:translateX(100%);opacity:0}}
-.pp-avatar{width:64px;height:64px;border-radius:16px;background:linear-gradient(135deg,var(--violet),var(--cyan));display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:800;color:#fff;box-shadow:0 8px 20px rgba(139,92,246,.4);flex-shrink:0}
+.pp-avatar{width:54px;height:54px;border-radius:12px;overflow:hidden;border:1px solid rgba(255,255,255,.22);background:rgba(2,6,23,.66);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;color:var(--text0);box-shadow:0 8px 18px rgba(0,0,0,.35);flex-shrink:0}
+.pp-avatar img{width:100%;height:100%;display:block;object-fit:cover}
 .pp-name{font-size:20px;font-weight:800;margin-bottom:4px}
 .pp-meta{font-size:13px;color:var(--text1);font-family:var(--mono)}
 .btn-play{width:100%;padding:18px;border-radius:var(--r-xl);background:linear-gradient(135deg,var(--violet),var(--cyan));font-size:18px;font-weight:800;letter-spacing:3px;color:white;border:none;display:flex;align-items:center;justify-content:center;gap:10px;transition:all .2s;box-shadow:0 6px 25px rgba(139,92,246,.35)}
@@ -291,7 +292,7 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
 .pp-content-name{font-size:14px;font-weight:650;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;-webkit-user-select:text;user-select:text}
 .pp-content-meta{font-size:11px;color:var(--text2);font-family:var(--mono);margin-top:2px}
 /* Logs tab */
-.pp-log-files{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+.pp-log-files{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
 .pp-log-file-btn{padding:7px 14px;border-radius:var(--r-sm);border:1px solid var(--border);background:transparent;color:var(--text1);font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;font-family:var(--font);display:flex;align-items:center;gap:6px}
 .pp-log-file-btn:hover{border-color:var(--violet);color:var(--text0)}
 .pp-log-file-btn.active{border-color:var(--cyan);background:rgba(34,211,238,.08);color:var(--cyan)}
@@ -826,7 +827,14 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
 
     <!-- Logs -->
     <div class="pp-tab-pane" id="pptab-logs">
-      <div id="pack-log-files" class="pp-log-files"></div>
+      <!-- Live log section -->
+      <div id="pack-live-log-section" style="display:none;margin-bottom:16px">
+        <div style="font-size:11px;font-weight:700;color:var(--green);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;display:flex;align-items:center;gap:6px">
+          <span style="width:6px;height:6px;background:var(--green);border-radius:50%;display:inline-block;animation:pulse 1s infinite"></span>
+          <span data-i18n="pack.logs.live">LOG EN DIRECT</span>
+        </div>
+        <div id="pack-live-log" style="background:#000;border:1px solid var(--border);border-radius:var(--r-md);padding:12px;font-family:var(--mono);font-size:11px;color:var(--text1);height:180px;overflow-y:auto;line-height:1.6;-webkit-user-select:text;user-select:text"></div>
+      </div>
       <div class="pp-log-actions">
         <button id="pack-log-copy" class="btn-ghost" style="font-size:12px;padding:6px 14px">
           <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><rect x="4" y="4" width="8" height="8" rx="1"/><path d="M2 10V2h8"/></svg>
@@ -836,16 +844,9 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
         <span id="pack-log-lines" style="font-size:11px;color:var(--text2);font-family:var(--mono);margin-left:auto"></span>
       </div>
       <div id="pack-log-viewer" class="pp-log-viewer">
-        <div style="color:var(--text2);font-size:12px;padding:20px;text-align:center" data-i18n="pack.logs.select">Sélectionnez un fichier de log ci-dessus</div>
+        <div style="color:var(--text2);font-size:12px;padding:20px;text-align:center" data-i18n="pack.logs.select">Sélectionnez un fichier de log ci-dessous</div>
       </div>
-      <!-- Live log section -->
-      <div id="pack-live-log-section" style="display:none;margin-top:16px">
-        <div style="font-size:11px;font-weight:700;color:var(--green);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;display:flex;align-items:center;gap:6px">
-          <span style="width:6px;height:6px;background:var(--green);border-radius:50%;display:inline-block;animation:pulse 1s infinite"></span>
-          <span data-i18n="pack.logs.live">LOG EN DIRECT</span>
-        </div>
-        <div id="pack-live-log" style="background:#000;border:1px solid var(--border);border-radius:var(--r-md);padding:12px;font-family:var(--mono);font-size:11px;color:var(--text1);height:180px;overflow-y:auto;line-height:1.6;-webkit-user-select:text;user-select:text"></div>
-      </div>
+      <div id="pack-log-files" class="pp-log-files"></div>
     </div>
 
     <!-- Settings -->
@@ -1039,7 +1040,7 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
   <div style="padding:16px 20px 0;flex-shrink:0;position:relative;border-bottom:1px solid var(--border)">
     <button id="pp-close" style="position:absolute;top:14px;left:14px;background:none;border:1px solid transparent;color:var(--text1);font-size:16px;cursor:pointer;z-index:10;width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;transition:all .15s">✕</button>
     <div style="display:flex;align-items:center;gap:14px;padding:4px 0 14px;margin-left:36px">
-      <div class="pp-avatar" id="pp-avatar" style="width:52px;height:52px;font-size:22px">?</div>
+      <div class="pp-avatar" id="pp-avatar">?</div>
       <div style="min-width:0;flex:1">
         <div class="pp-name" id="pp-name" style="font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
         <div class="pp-meta" id="pp-meta" style="font-size:12px"></div>

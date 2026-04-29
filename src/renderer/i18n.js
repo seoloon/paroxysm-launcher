@@ -184,7 +184,7 @@ const TRANSLATIONS = {
     // Pack page — logs tab
     'pack.logs.copy':     'Copier tout',
     'pack.logs.clear':    'Effacer vue',
-    'pack.logs.select':   'Sélectionnez un fichier de log ci-dessus',
+    'pack.logs.select':   'Sélectionnez un fichier de log ci-dessous',
     'pack.logs.live':     'LOG EN DIRECT',
     'pack.logs.copied':   'Copié !',
     'pack.logs.copied_button':'✓ Copié !',
@@ -489,7 +489,7 @@ const TRANSLATIONS = {
     // Pack page — logs tab
     'pack.logs.copy':     'Copy all',
     'pack.logs.clear':    'Clear view',
-    'pack.logs.select':   'Select a log file above',
+    'pack.logs.select':   'Select a log file below',
     'pack.logs.live':     'LIVE LOG',
     'pack.logs.copied':   'Copied!',
     'pack.logs.copied_button':'✓ Copied!',

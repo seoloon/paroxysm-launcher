@@ -386,7 +386,24 @@ function openPlayPanel(pack){
   currentPack=pack;
   const panel=$('play-panel');
   panel.classList.remove('closing');panel.style.display='flex';
-  $('pp-avatar').textContent=(pack.name[0]||'?').toUpperCase();
+  const avatarEl=$('pp-avatar');
+  const avatarFallback=(pack.name[0]||'?').toUpperCase();
+  avatarEl.textContent=avatarFallback;
+  avatarEl.querySelectorAll('img').forEach(n=>n.remove());
+  if(pack.iconData){
+    const icon=document.createElement('img');
+    icon.alt='';
+    icon.decoding='async';
+    icon.src=pack.iconData;
+    icon.style.width='100%';
+    icon.style.height='100%';
+    icon.style.objectFit='cover';
+    icon.style.borderRadius='inherit';
+    icon.addEventListener('load',()=>{
+      avatarEl.textContent='';
+      if(!icon.isConnected)avatarEl.appendChild(icon);
+    },{once:true});
+  }
   $('pp-name').textContent=pack.name;$('pp-meta').textContent='v'+pack.version;
   $('pp-mc').textContent=pack.mcVersion;
   $('pp-loader').textContent=formatLoaderWithVersion(pack.modloader,pack.modloaderVersion);
