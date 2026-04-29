@@ -75,6 +75,16 @@ contextBridge.exposeInMainWorld('px', {
   system: {
     ram: () => ipcRenderer.invoke('system:ram'),
   },
+  java: {
+    listInstallations: ()        => ipcRenderer.invoke('java:list-installations'),
+    installRecommended: (major)  => ipcRenderer.invoke('java:install-recommended', major),
+    browse: (major)              => ipcRenderer.invoke('java:browse', major),
+    test: (major)                => ipcRenderer.invoke('java:test', major),
+  },
+  resources: {
+    info:       () => ipcRenderer.invoke('resource:get-info'),
+    purgeCache: () => ipcRenderer.invoke('resource:purge-cache'),
+  },
   instance: {
     getMcVersions:     ()                       => ipcRenderer.invoke('instance:get-mc-versions'),
     getLoaderVersions: (loader, mcVersion)      => ipcRenderer.invoke('instance:get-loader-versions', { loader, mcVersion }),
