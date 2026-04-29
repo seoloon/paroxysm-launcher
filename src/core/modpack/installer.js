@@ -82,7 +82,7 @@ class ModpackInstaller {
     };
   }
 
-  async downloadMods(onEach = () => {}) {
+  async downloadMods(onEach = () => {}, limits = {}) {
     fs.mkdirSync(this.modsDir, { recursive: true });
 
     const items = this.parsed.format === 'curseforge'
@@ -93,7 +93,11 @@ class ModpackInstaller {
 
     let done = 0;
     const integrityFailed = [];
-    const failed = await downloadBatch(items, 3, (item, err) => {
+    const maxDownloads = Math.max(1, Math.min(16, Math.round(+limits.maxConcurrentDownloads || 3)));
+    const maxWrites = Math.max(1, Math.min(16, Math.round(+limits.maxConcurrentWrites || maxDownloads)));
+    const effectiveConcurrency = Math.max(1, Math.min(maxDownloads, maxWrites));
+
+    const failed = await downloadBatch(items, effectiveConcurrency, (item, err) => {
       done++;
       const label = item.displayName || path.basename(item.dest);
 
