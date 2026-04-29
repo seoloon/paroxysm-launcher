@@ -47,24 +47,99 @@ function hashFile(filePath, algorithm) {
 function sanitizeSettings(input, current = {}) {
   const src = (input && typeof input === 'object') ? input : {};
   const cur = (current && typeof current === 'object') ? current : {};
+  const out = {
+    ram: 4,
+    username: 'Player',
+    forceOffline: false,
+    cfApiKey: '',
+    language: 'fr',
+    updateChannel: 'stable',
+    discordRpcEnabled: true,
+    javaPaths: {},
+    instanceDefaults: {
+      fullscreen: false,
+      width: 1280,
+      height: 720,
+      ram: 4,
+      javaArgs: '',
+      envVars: '',
+    },
+    resources: {
+      maxConcurrentDownloads: 3,
+      maxConcurrentWrites: 3,
+    },
+  };
+
+  const applyBase = (obj) => {
+    if (Number.isFinite(+obj.ram)) out.ram = Math.max(1, Math.min(32, Math.round(+obj.ram)));
+    if (typeof obj.username === 'string') out.username = obj.username.trim().slice(0, 16) || out.username;
+    if (typeof obj.forceOffline === 'boolean') out.forceOffline = obj.forceOffline;
+    if (typeof obj.cfApiKey === 'string') out.cfApiKey = obj.cfApiKey.trim().slice(0, 256);
+    if (typeof obj.language === 'string' && ['fr', 'en'].includes(obj.language)) out.language = obj.language;
+    if (typeof obj.updateChannel === 'string' && ['stable', 'beta'].includes(obj.updateChannel)) out.updateChannel = obj.updateChannel;
+    if (typeof obj.discordRpcEnabled === 'boolean') out.discordRpcEnabled = obj.discordRpcEnabled;
+  };
+
+  const applyJava = (obj) => {
+    const raw = (obj && typeof obj.javaPaths === 'object' && obj.javaPaths) ? obj.javaPaths : null;
+    if (!raw) return;
+    for (const major of ['8', '17', '21', '25']) {
+      const p = raw[major];
+      if (typeof p === 'string') out.javaPaths[major] = p.trim().slice(0, 1024);
+    }
+  };
+
+  const applyInstanceDefaults = (obj) => {
+    const d = (obj && typeof obj.instanceDefaults === 'object' && obj.instanceDefaults) ? obj.instanceDefaults : null;
+    if (!d) return;
+    if (typeof d.fullscreen === 'boolean') out.instanceDefaults.fullscreen = d.fullscreen;
+    if (Number.isFinite(+d.width)) out.instanceDefaults.width = Math.max(320, Math.min(8192, Math.round(+d.width)));
+    if (Number.isFinite(+d.height)) out.instanceDefaults.height = Math.max(240, Math.min(8192, Math.round(+d.height)));
+    if (Number.isFinite(+d.ram)) out.instanceDefaults.ram = Math.max(1, Math.min(32, Math.round(+d.ram)));
+    if (typeof d.javaArgs === 'string') out.instanceDefaults.javaArgs = d.javaArgs.slice(0, 4000);
+    if (typeof d.envVars === 'string') out.instanceDefaults.envVars = d.envVars.slice(0, 8000);
+  };
+
+  const applyResources = (obj) => {
+    const r = (obj && typeof obj.resources === 'object' && obj.resources) ? obj.resources : null;
+    if (!r) return;
+    if (Number.isFinite(+r.maxConcurrentDownloads)) out.resources.maxConcurrentDownloads = Math.max(1, Math.min(16, Math.round(+r.maxConcurrentDownloads)));
+    if (Number.isFinite(+r.maxConcurrentWrites)) out.resources.maxConcurrentWrites = Math.max(1, Math.min(16, Math.round(+r.maxConcurrentWrites)));
+  };
+
+  applyBase(cur);
+  applyJava(cur);
+  applyInstanceDefaults(cur);
+  applyResources(cur);
+
+  applyBase(src);
+  applyJava(src);
+  applyInstanceDefaults(src);
+  applyResources(src);
+
+  return out;
+}
+
+function parseJvmArgs(input) {
+  const text = String(input || '').trim();
+  if (!text) return [];
+  const matches = text.match(/(?:[^\s"]+|"[^"]*")+/g) || [];
+  return matches.map(s => s.replace(/^"(.*)"$/, '$1')).filter(Boolean);
+}
+
+function parseEnvVars(input) {
   const out = {};
-
-  if (Number.isFinite(+cur.ram)) out.ram = Math.max(1, Math.min(32, Math.round(+cur.ram)));
-  if (typeof cur.username === 'string') out.username = cur.username.trim().slice(0, 16);
-  if (typeof cur.forceOffline === 'boolean') out.forceOffline = cur.forceOffline;
-  if (typeof cur.cfApiKey === 'string') out.cfApiKey = cur.cfApiKey.trim().slice(0, 256);
-  if (typeof cur.language === 'string' && ['fr', 'en'].includes(cur.language)) out.language = cur.language;
-  if (typeof cur.updateChannel === 'string' && ['stable', 'beta'].includes(cur.updateChannel)) out.updateChannel = cur.updateChannel;
-
-  if (Number.isFinite(+src.ram)) out.ram = Math.max(1, Math.min(32, Math.round(+src.ram)));
-  if (typeof src.username === 'string') out.username = src.username.trim().slice(0, 16);
-  if (typeof src.forceOffline === 'boolean') out.forceOffline = src.forceOffline;
-  if (typeof src.cfApiKey === 'string') out.cfApiKey = src.cfApiKey.trim().slice(0, 256);
-  if (typeof src.language === 'string' && ['fr', 'en'].includes(src.language)) out.language = src.language;
-  if (typeof src.updateChannel === 'string' && ['stable', 'beta'].includes(src.updateChannel)) out.updateChannel = src.updateChannel;
-
-  if (!out.updateChannel) out.updateChannel = 'stable';
-
+  const lines = String(input || '').split(/\r?\n/);
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const idx = line.indexOf('=');
+    if (idx <= 0) continue;
+    const key = line.slice(0, idx).trim();
+    const value = line.slice(idx + 1).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    out[key] = value;
+  }
   return out;
 }
 
@@ -117,6 +192,16 @@ function loadVanillaProfile(mcVersion) {
     if (fs.existsSync(jsonPath)) return JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
   } catch {}
   return null;
+}
+
+function estimateRequiredJavaMajor(mcVersion, vanillaProfile = null) {
+  const fromProfile = parseInt(vanillaProfile?.javaVersion?.majorVersion, 10);
+  if (Number.isFinite(fromProfile) && fromProfile > 0) return fromProfile;
+  const minor = parseInt((mcVersion || '1.21').split('.')[1] || '0', 10);
+  if (minor <= 16) return 8;
+  if (minor <= 17) return 16;
+  if (minor <= 20) return 17;
+  return 21;
 }
 
 let mainWindow = null;
@@ -173,6 +258,7 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false, contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
+      devTools: isDev,
      // zoomFactor: 1.5
     },
     backgroundColor: '#020617',
@@ -184,6 +270,17 @@ function createWindow() {
   mainWindow.webContents.on('did-finish-load', () => {
     emitUpdaterState();
   });
+  if (!isDev) {
+    mainWindow.webContents.on('before-input-event', (event, input) => {
+      const key = String(input?.key || '').toUpperCase();
+      const ctrlOrCmd = !!(input?.control || input?.meta);
+      const shift = !!input?.shift;
+      const blocked =
+        key === 'F12' ||
+        (ctrlOrCmd && shift && (key === 'I' || key === 'J' || key === 'C'));
+      if (blocked) event.preventDefault();
+    });
+  }
   if (isDev) mainWindow.webContents.openDevTools({ mode: 'detach' });
   mainWindow.on('closed', () => { mainWindow = null; });
 }
@@ -457,6 +554,150 @@ ipcMain.handle('system:ram', () => {
   return { totalMB, totalGB: Math.round(totalGB * 10) / 10 };
 });
 
+function getCacheDir() {
+  return path.join(Store.BASE_DIR, 'cache');
+}
+
+function dirSizeBytes(root) {
+  let total = 0;
+  const stack = [root];
+  while (stack.length) {
+    const cur = stack.pop();
+    let entries = [];
+    try { entries = fs.readdirSync(cur, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      const full = path.join(cur, e.name);
+      if (e.isDirectory()) stack.push(full);
+      else if (e.isFile()) {
+        try { total += fs.statSync(full).size; } catch {}
+      }
+    }
+  }
+  return total;
+}
+
+ipcMain.handle('java:list-installations', async () => {
+  const settings = sanitizeSettings(store.get('settings'), store.get('settings'));
+  const majors = [8, 17, 21, 25];
+  const result = {};
+
+  for (const major of majors) {
+    const key = String(major);
+    const configured = settings.javaPaths?.[key] || '';
+    let configuredInfo = null;
+
+    if (configured) {
+      try {
+        if (fs.existsSync(configured)) {
+          const detectedMajor = await JavaManager.getJavaMajor(configured);
+          configuredInfo = {
+            path: configured,
+            valid: detectedMajor >= major,
+            major: detectedMajor,
+            reason: detectedMajor >= major ? '' : `Java ${major}+ requis`,
+          };
+        } else {
+          configuredInfo = { path: configured, valid: false, major: null, reason: 'Chemin introuvable' };
+        }
+      } catch (e) {
+        configuredInfo = { path: configured, valid: false, major: null, reason: e.message };
+      }
+    }
+
+    const auto = await JavaManager.resolveInstalledMajor(major).catch(() => null);
+    result[key] = {
+      major,
+      configured: configuredInfo,
+      auto: auto || null,
+      effectivePath: (configuredInfo?.valid ? configuredInfo.path : (auto?.path || '')),
+    };
+  }
+
+  return result;
+});
+
+ipcMain.handle('java:install-recommended', async (_, major) => {
+  try {
+    const target = Math.max(1, parseInt(major, 10) || 0);
+    if (!target) throw new Error('Version Java invalide');
+    const javaPath = await JavaManager.ensureMajor(target, () => {});
+    const settings = sanitizeSettings(store.get('settings'), store.get('settings'));
+    settings.javaPaths = settings.javaPaths || {};
+    settings.javaPaths[String(target)] = javaPath;
+    store.set('settings', sanitizeSettings(settings, settings));
+    return { ok: true, path: javaPath };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('java:browse', async (_, major) => {
+  try {
+    const target = Math.max(1, parseInt(major, 10) || 0);
+    if (!target) throw new Error('Version Java invalide');
+    const filters = process.platform === 'win32'
+      ? [{ name: 'Java', extensions: ['exe'] }]
+      : [{ name: 'Java', extensions: ['*'] }];
+    const picked = await dialog.showOpenDialog(mainWindow, {
+      title: `Sélectionner Java ${target}`,
+      filters,
+      properties: ['openFile'],
+    });
+    if (picked.canceled || !picked.filePaths?.[0]) return { ok: false, canceled: true };
+    const javaPath = picked.filePaths[0];
+    const detectedMajor = await JavaManager.getJavaMajor(javaPath);
+    if (detectedMajor < target) {
+      return { ok: false, error: `Ce binaire est Java ${detectedMajor}. Java ${target}+ est requis.` };
+    }
+    const settings = sanitizeSettings(store.get('settings'), store.get('settings'));
+    settings.javaPaths = settings.javaPaths || {};
+    settings.javaPaths[String(target)] = javaPath;
+    store.set('settings', sanitizeSettings(settings, settings));
+    return { ok: true, path: javaPath, major: detectedMajor };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('java:test', async (_, major) => {
+  try {
+    const target = Math.max(1, parseInt(major, 10) || 0);
+    if (!target) throw new Error('Version Java invalide');
+    const settings = sanitizeSettings(store.get('settings'), store.get('settings'));
+    const preferred = settings.javaPaths?.[String(target)] || '';
+    const fallback = await JavaManager.resolveInstalledMajor(target).catch(() => null);
+    const javaPath = preferred || fallback?.path;
+    if (!javaPath) throw new Error(`Aucun Java ${target}+ trouvé`);
+    const detectedMajor = await JavaManager.getJavaMajor(javaPath);
+    return { ok: true, path: javaPath, major: detectedMajor, valid: detectedMajor >= target };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('resource:get-info', () => {
+  const cacheDir = getCacheDir();
+  const exists = fs.existsSync(cacheDir);
+  const sizeBytes = exists ? dirSizeBytes(cacheDir) : 0;
+  return {
+    appDir: Store.BASE_DIR,
+    cacheDir,
+    cacheExists: exists,
+    cacheSizeBytes: sizeBytes,
+  };
+});
+
+ipcMain.handle('resource:purge-cache', () => {
+  try {
+    const cacheDir = getCacheDir();
+    if (fs.existsSync(cacheDir)) fs.rmSync(cacheDir, { recursive: true, force: true });
+    fs.mkdirSync(cacheDir, { recursive: true });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 function scanInstanceFiles(entry, { includeConfig = true } = {}) {
   if (!entry?.gameDir) return [];
 
@@ -561,6 +802,9 @@ ipcMain.handle('config:get', async (_, key) => {
     }
   }
   // Normal config key
+  if (key === 'settings') {
+    return sanitizeSettings(store.get('settings'), store.get('settings'));
+  }
   return store.get(key);
 });
 
@@ -1119,13 +1363,16 @@ ipcMain.handle('modpack:import', async (_, filePath) => {
 
     // 5. Mods
     send('install:progress', { step: 'mods', pct: 0, detail: 'Téléchargement des mods...' });
-    const settings  = store.get('settings') || {};
+    const settings  = sanitizeSettings(store.get('settings'), store.get('settings'));
     const installer = new ModpackInstaller(parsed, settings.cfApiKey || null);
     let modsTotal   = Math.max(parsed.files.length, 1);
     const failed    = await installer.downloadMods((done, total, name) => {
       modsTotal = total || modsTotal;
       send('install:progress', { step: 'mods', pct: Math.round((done / modsTotal) * 100), detail: `[${done}/${modsTotal}] ${name}` });
       send('install:log', `  [${done}/${modsTotal}] ${name}`);
+    }, {
+      maxConcurrentDownloads: settings.resources?.maxConcurrentDownloads,
+      maxConcurrentWrites: settings.resources?.maxConcurrentWrites,
     });
     if (failed.length) send('install:log', `⚠ ${failed.length} mod(s) ont échoué`);
     send('install:progress', { step: 'mods', pct: 100, detail: `${modsTotal - failed.length}/${modsTotal} mods OK` });
@@ -1175,19 +1422,40 @@ ipcMain.handle('game:launch', async (_, modpackId) => {
     const entry = library.get(modpackId);
     if (!entry) throw new Error('Modpack introuvable dans la bibliothèque');
 
-    const settings     = store.get('settings') || {};
+    const settings     = sanitizeSettings(store.get('settings'), store.get('settings'));
     const profile      = await auth.getProfile().catch(() => null);
     const forceOffline = settings.forceOffline || false;
     const useOnline    = profile && !forceOffline;
 
     // Load vanilla profile to get javaVersion.majorVersion for correct Java selection
     const vanillaProfile = loadVanillaProfile(entry.mcVersion);
-    const javaPath = await JavaManager.ensureJava(entry.mcVersion, () => {}, vanillaProfile);
+    const requiredJavaMajor = estimateRequiredJavaMajor(entry.mcVersion, vanillaProfile);
+    const configuredJavaPath = settings.javaPaths?.[String(requiredJavaMajor)] || '';
+    let javaPath = '';
+    if (configuredJavaPath && fs.existsSync(configuredJavaPath)) {
+      const configuredMajor = await JavaManager.getJavaMajor(configuredJavaPath).catch(() => 0);
+      if (configuredMajor >= requiredJavaMajor) {
+        javaPath = configuredJavaPath;
+      }
+    }
+    if (!javaPath) {
+      javaPath = await JavaManager.ensureJava(entry.mcVersion, () => {}, vanillaProfile);
+    }
 
-    // Use per-instance RAM if set, otherwise fall back to global setting
-    const instanceRam = entry.ram || 0;
-    const globalRam   = settings.ram || 4;
-    const ramToUse    = instanceRam > 0 ? instanceRam : globalRam;
+    const defaults = settings.instanceDefaults || {};
+    const defaultRam = Math.max(1, Math.min(32, Math.round(+defaults.ram || settings.ram || 4)));
+    const instanceRam = Number.isFinite(+entry.ram) ? +entry.ram : 0;
+    const ramToUse = instanceRam > 0 ? Math.max(1, Math.min(32, Math.round(instanceRam))) : defaultRam;
+
+    const defaultWidth = Math.max(320, Math.min(8192, Math.round(+defaults.width || 1280)));
+    const defaultHeight = Math.max(240, Math.min(8192, Math.round(+defaults.height || 720)));
+    const width = Number.isFinite(+entry.windowWidth) ? Math.max(320, Math.min(8192, Math.round(+entry.windowWidth))) : defaultWidth;
+    const height = Number.isFinite(+entry.windowHeight) ? Math.max(240, Math.min(8192, Math.round(+entry.windowHeight))) : defaultHeight;
+    const fullscreen = (typeof entry.fullscreen === 'boolean') ? entry.fullscreen : !!defaults.fullscreen;
+    const javaArgsSource = (typeof entry.javaArgs === 'string' && entry.javaArgs.trim()) ? entry.javaArgs : (defaults.javaArgs || '');
+    const envVarsSource = (typeof entry.envVars === 'string' && entry.envVars.trim()) ? entry.envVars : (defaults.envVars || '');
+    const extraJvmArgs = parseJvmArgs(javaArgsSource);
+    const extraEnv = parseEnvVars(envVarsSource);
 
     const child = await GameLauncher.launch({
       entry,
@@ -1196,6 +1464,11 @@ ipcMain.handle('game:launch', async (_, modpackId) => {
       accessToken: useOnline ? auth.getStoredToken() : null,
       uuid:        useOnline ? auth.getStoredUUID()  : null,
       ram:         ramToUse,
+      fullscreen,
+      width,
+      height,
+      extraJvmArgs,
+      extraEnv,
       offline:     !useOnline,
       offlineName: settings.username || 'Player',
     });
@@ -1382,9 +1655,19 @@ ipcMain.handle('instance:create', async (_, { name, mcVersion, loader, loaderVer
       format: 'custom', files: [], iconData: null, tmpDir: null,
     };
     const entry = library.add(parsed, [], versionId);
+    const settings = sanitizeSettings(store.get('settings'), store.get('settings'));
+    const d = settings.instanceDefaults || {};
+    const seeded = library.update(entry.id, {
+      ram: Number.isFinite(+d.ram) ? Math.max(1, Math.min(32, Math.round(+d.ram))) : entry.ram,
+      fullscreen: !!d.fullscreen,
+      windowWidth: Number.isFinite(+d.width) ? Math.max(320, Math.min(8192, Math.round(+d.width))) : 1280,
+      windowHeight: Number.isFinite(+d.height) ? Math.max(240, Math.min(8192, Math.round(+d.height))) : 720,
+      javaArgs: typeof d.javaArgs === 'string' ? d.javaArgs : '',
+      envVars: typeof d.envVars === 'string' ? d.envVars : '',
+    });
 
     send('install:progress', { step: 'done', pct: 100, detail: 'Instance créée !' });
-    send('install:done', entry);
+    send('install:done', seeded || entry);
     send('install:log', `✅ Instance "${name}" prête !`);
     return { ok: true, entry };
   } catch(e) {
