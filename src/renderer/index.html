@@ -995,6 +995,14 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
             <label class="toggle"><input type="checkbox" id="pack-fullscreen"/><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
           </div>
           <div class="section-sep"></div>
+          <div class="toggle-row">
+            <div>
+              <div class="form-label" style="margin:0" data-i18n="pack.settings.use_global_resolution">Utiliser la résolution globale</div>
+              <div class="form-hint" style="margin-top:4px" id="pack-resolution-hint" data-i18n="pack.settings.use_global_resolution_hint">Reprend la résolution des paramètres globaux.</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="pack-use-global-resolution" checked/><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+          </div>
+          <div class="section-sep"></div>
           <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px">
             <div class="form-group"><label class="form-label" for="pack-width" data-i18n="pack.settings.width">Width</label><input type="number" class="form-input" id="pack-width" min="320" max="8192" step="1"/></div>
             <div class="form-group"><label class="form-label" for="pack-height" data-i18n="pack.settings.height">Height</label><input type="number" class="form-input" id="pack-height" min="240" max="8192" step="1"/></div>
