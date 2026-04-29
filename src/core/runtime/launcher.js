@@ -26,7 +26,10 @@ const ASSETS_DIR   = path.join(MC_BASE, 'assets');
 
 class GameLauncher {
   static async launch(opts) {
-    const { entry, javaPath, profile, accessToken, uuid, ram, offline, offlineName } = opts;
+    const {
+      entry, javaPath, profile, accessToken, uuid, ram, offline, offlineName,
+      fullscreen = false, width = 1280, height = 720, extraJvmArgs = [], extraEnv = {},
+    } = opts;
     const versionId = entry.versionId;
     const mcVersion = entry.mcVersion;
 
@@ -57,6 +60,9 @@ class GameLauncher {
     const playerToken = offline ? '0' : (accessToken || '0');
     const userType    = offline ? 'legacy' : 'msa';
     const assetIndex  = merged.assetIndex?.id || mcVersion;
+    const safeWidth  = Number.isFinite(+width)  ? Math.max(320, Math.min(8192, Math.round(+width)))   : 1280;
+    const safeHeight = Number.isFinite(+height) ? Math.max(240, Math.min(8192, Math.round(+height)))  : 720;
+    const customResolution = Number.isFinite(+width) && Number.isFinite(+height) && safeWidth > 0 && safeHeight > 0;
 
     const ramMB = Math.max(512, Math.round((ram || 4) * 1024));
 
@@ -100,8 +106,8 @@ class GameLauncher {
       '${auth_access_token}':      playerToken,
       '${user_type}':              userType,
       '${version_type}':           'release',
-      '${resolution_width}':       '1280',
-      '${resolution_height}':      '720',
+      '${resolution_width}':       String(safeWidth),
+      '${resolution_height}':      String(safeHeight),
       '${clientid}':               '',
       '${auth_xuid}':              '',
       '${quickPlayPath}':          '',
@@ -112,7 +118,7 @@ class GameLauncher {
 
     const features = {
       is_demo_user:               false,
-      has_custom_resolution:      false,
+      has_custom_resolution:      customResolution,
       is_quick_play_singleplayer: false,
       is_quick_play_multiplayer:  false,
       is_quick_play_realms:       false,
@@ -126,6 +132,7 @@ class GameLauncher {
     }
 
     const finalGameArgs = rawGameArgs.filter(a => a !== '--demo' && !a.includes('${'));
+    if (fullscreen && !finalGameArgs.includes('--fullscreen')) finalGameArgs.push('--fullscreen');
 
     const mainClass = loaderJson.mainClass || vanillaJson.mainClass;
     if (!mainClass) throw new Error(`mainClass introuvable dans ${versionId}`);
@@ -141,7 +148,7 @@ class GameLauncher {
     });
 
     // Full command: base perf flags + loader JVM args + main class + game args
-    const fullArgs = [...baseJvmArgs, ...filteredJvmArgs, mainClass, ...finalGameArgs].filter(Boolean);
+    const fullArgs = [...baseJvmArgs, ...(Array.isArray(extraJvmArgs) ? extraJvmArgs : []), ...filteredJvmArgs, mainClass, ...finalGameArgs].filter(Boolean);
 
     console.log('[launch] java:      ', javaPath, `(v${javaVersion})`);
     console.log('[launch] mainClass: ', mainClass);
@@ -155,6 +162,7 @@ class GameLauncher {
       stdio:    ['ignore', 'pipe', 'pipe'],
       env: {
         ...process.env,
+        ...(extraEnv && typeof extraEnv === 'object' ? extraEnv : {}),
         JAVA_HOME:           path.dirname(path.dirname(javaPath)),
         // Forge / Connector sometimes need these
         FORGE_LIBS_PATH:     LIBS_DIR,
