@@ -795,6 +795,22 @@ let packGameCloseCb = null;
 const TYPE_COLORS_PP = {mod:'#8B5CF6',shader:'#F59E0B',resourcepack:'#3B82F6',config:'#64748B',other:'#334155'};
 const TYPE_LABELS_PP = {mod:'MOD',shader:'SHD',resourcepack:'RES',config:'CFG',other:'?'};
 
+function getGlobalResolutionDefaults() {
+  const wRaw = parseInt(($('def-width')?.value ?? ''), 10);
+  const hRaw = parseInt(($('def-height')?.value ?? ''), 10);
+  const width = Number.isFinite(wRaw) ? Math.max(320, Math.min(8192, wRaw)) : 1280;
+  const height = Number.isFinite(hRaw) ? Math.max(240, Math.min(8192, hRaw)) : 720;
+  return { width, height };
+}
+
+function syncPackResolutionFields() {
+  const useGlobal = !!$('pack-use-global-resolution')?.checked;
+  const widthInput = $('pack-width');
+  const heightInput = $('pack-height');
+  widthInput.disabled = useGlobal;
+  heightInput.disabled = useGlobal;
+}
+
 async function openPackPage(pack) {
   packPagePack = pack;
   packIsRunning = !!runningGamePackId;
@@ -868,8 +884,18 @@ async function openPackPage(pack) {
   $('pack-custom-name').value = pack.customName || '';
   $('pack-notes').value = pack.notes || '';
   $('pack-fullscreen').checked = !!pack.fullscreen;
-  $('pack-width').value = Number.isFinite(+pack.windowWidth) ? Math.max(320, Math.min(8192, Math.round(+pack.windowWidth))) : 1280;
-  $('pack-height').value = Number.isFinite(+pack.windowHeight) ? Math.max(240, Math.min(8192, Math.round(+pack.windowHeight))) : 720;
+  const globalRes = getGlobalResolutionDefaults();
+  const localWidth = Number.isFinite(+pack.windowWidth) ? Math.max(320, Math.min(8192, Math.round(+pack.windowWidth))) : null;
+  const localHeight = Number.isFinite(+pack.windowHeight) ? Math.max(240, Math.min(8192, Math.round(+pack.windowHeight))) : null;
+  const hasExplicitLocalResolution = Number.isFinite(localWidth) && Number.isFinite(localHeight);
+  const sameAsGlobalResolution = hasExplicitLocalResolution && localWidth === globalRes.width && localHeight === globalRes.height;
+  const hasLocalResolution = hasExplicitLocalResolution && !sameAsGlobalResolution;
+  $('pack-use-global-resolution').checked = !hasLocalResolution;
+  $('pack-width').value = hasLocalResolution ? localWidth : globalRes.width;
+  $('pack-height').value = hasLocalResolution ? localHeight : globalRes.height;
+  syncPackResolutionFields();
+  const resolutionHint = $('pack-resolution-hint');
+  if (resolutionHint) resolutionHint.textContent = t('pack.settings.use_global_resolution_hint');
   $('pack-java-args').value = pack.javaArgs || '';
   $('pack-env-vars').value = pack.envVars || '';
   const packRamMax = _systemRamGB > 0 ? Math.max(1, Math.floor(_systemRamGB)) : 32;
@@ -1236,6 +1262,8 @@ $('pack-save-settings').addEventListener('click', async function() {
   if (!packPagePack) return;
   this.disabled = true;
 
+  const useGlobalResolution = !!$('pack-use-global-resolution')?.checked;
+  const globalRes = getGlobalResolutionDefaults();
   const fields = {
     customName: $('pack-custom-name').value.trim() || null,
     notes:      $('pack-notes').value.trim(),
@@ -1245,13 +1273,15 @@ $('pack-save-settings').addEventListener('click', async function() {
       return Math.max(0, Math.min(value, max));
     })(),
     fullscreen: $('pack-fullscreen').checked,
-    windowWidth: (() => {
-      const v = parseInt($('pack-width').value, 10) || 1280;
-      return Math.max(320, Math.min(8192, v));
+    windowWidth: useGlobalResolution ? null : (() => {
+      const v = parseInt($('pack-width').value, 10);
+      const safe = Number.isFinite(v) ? v : globalRes.width;
+      return Math.max(320, Math.min(8192, safe));
     })(),
-    windowHeight: (() => {
-      const v = parseInt($('pack-height').value, 10) || 720;
-      return Math.max(240, Math.min(8192, v));
+    windowHeight: useGlobalResolution ? null : (() => {
+      const v = parseInt($('pack-height').value, 10);
+      const safe = Number.isFinite(v) ? v : globalRes.height;
+      return Math.max(240, Math.min(8192, safe));
     })(),
     javaArgs: String($('pack-java-args').value || '').trim().slice(0, 4000),
     envVars: String($('pack-env-vars').value || '').trim().slice(0, 8000),
@@ -1274,6 +1304,16 @@ $('pack-save-settings').addEventListener('click', async function() {
   this.disabled = false;
   $('pack-save-confirm').style.display = 'inline';
   setTimeout(() => { $('pack-save-confirm').style.display = 'none'; }, 2000);
+});
+
+$('pack-use-global-resolution')?.addEventListener('change', () => {
+  const useGlobal = !!$('pack-use-global-resolution')?.checked;
+  if (useGlobal) {
+    const globalRes = getGlobalResolutionDefaults();
+    $('pack-width').value = globalRes.width;
+    $('pack-height').value = globalRes.height;
+  }
+  syncPackResolutionFields();
 });
 
 $('pack-open-folder').addEventListener('click', () => {
