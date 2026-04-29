@@ -80,6 +80,55 @@ class JavaManager {
     return javaPath;
   }
 
+  /**
+   * Ensure a specific Java major version is available.
+   * Used by advanced settings UI (manual Java management).
+   */
+  static async ensureMajor(majorInput, onProgress = () => {}) {
+    const major = Math.max(1, parseInt(majorInput, 10) || 0);
+    if (!major) throw new Error('Version Java invalide');
+    onProgress(0, `Java ${major} requis...`);
+
+    const embedded = await findEmbedded(major);
+    if (embedded) {
+      onProgress(100, `Java ${major} trouvé (cache launcher)`);
+      return embedded;
+    }
+
+    const system = await findSystem(major);
+    if (system) {
+      onProgress(100, `Java ${major}+ trouvé (système) : ${system}`);
+      return system;
+    }
+
+    const javaPath = await JavaManager._download(major, onProgress);
+    onProgress(100, `Java ${major} installé`);
+    return javaPath;
+  }
+
+  static async resolveInstalledMajor(majorInput) {
+    const major = Math.max(1, parseInt(majorInput, 10) || 0);
+    if (!major) return null;
+
+    const embedded = await findEmbedded(major);
+    if (embedded) {
+      const version = await getJavaMajorVersion(embedded).catch(() => null);
+      return { path: embedded, source: 'embedded', version };
+    }
+
+    const system = await findSystem(major);
+    if (system) {
+      const version = await getJavaMajorVersion(system).catch(() => null);
+      return { path: system, source: 'system', version };
+    }
+
+    return null;
+  }
+
+  static async getJavaMajor(javaPath) {
+    return getJavaMajorVersion(javaPath);
+  }
+
   static async _download(major, onProgress = () => {}) {
     const platform = process.platform;
     let arch       = process.arch;
