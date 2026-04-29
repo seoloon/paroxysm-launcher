@@ -77,6 +77,11 @@ class ModpackLibrary {
       ram:              null,                      // per-instance RAM override (null = use global)
       customName:       null,                      // user-set display name
       notes:            '',                        // user notes
+      fullscreen:       null,                      // null => use defaults
+      windowWidth:      null,                      // null => use defaults
+      windowHeight:     null,                      // null => use defaults
+      javaArgs:         '',                        // per-instance JVM args
+      envVars:          '',                        // per-instance env vars
     };
 
     const all = this._all();
@@ -98,7 +103,7 @@ class ModpackLibrary {
     const all = this._all();
     if (!all[id]) return false;
     // Only allow safe fields to be updated
-    const allowed = ['customName', 'iconData', 'ram', 'notes'];
+    const allowed = ['customName', 'iconData', 'ram', 'notes', 'fullscreen', 'windowWidth', 'windowHeight', 'javaArgs', 'envVars'];
     for (const k of allowed) {
       if (fields[k] !== undefined) all[id][k] = fields[k];
     }
