@@ -94,7 +94,7 @@ a:hover{color:var(--violet)}
 .lib-toolbar{display:flex;align-items:center;gap:12px;margin-bottom:24px}
 .search-wrap{position:relative;flex:1;max-width:380px}
 .search-wrap svg{position:absolute;left:14px;top:50%;transform:translateY(-50%);width:16px;height:16px;color:var(--text2);pointer-events:none;stroke:currentColor}
-.search-input{width:100%;padding:12px 16px 12px 42px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r-md);color:var(--text0);font-size:14px;font-weight:500;outline:none;transition:all .2s;}
+.search-input{width:100%;height:42px;padding:0 16px 0 42px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r-md);color:var(--text0);font-size:14px;font-weight:500;outline:none;transition:all .2s;box-sizing:border-box}
 .search-input:focus{border-color:var(--cyan);box-shadow:0 0 0 3px rgba(34,211,238,.15);background:var(--bg1)}
 .search-input::placeholder{color:var(--text2)}
 .library-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:20px}
@@ -151,11 +151,15 @@ a:hover{color:var(--violet)}
 .form-input[type="text"],.form-input[type="password"],.form-input[type="email"],.form-input[type="number"],textarea.form-input{background-image:none}
 select.form-input,.mr-select{
   appearance:none;-webkit-appearance:none;-moz-appearance:none;
+  height:42px;
+  padding-top:0;
+  padding-bottom:0;
   padding-right:36px;
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M2.5 4.5L6 8l3.5-3.5' stroke='%2394A3B8' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-repeat:no-repeat;
   background-position:right 12px center;
   background-size:12px 12px;
+  box-sizing:border-box;
 }
 select.form-input:hover,.mr-select:hover{border-color:var(--border-hi);color:var(--text0)}
 select.form-input:focus,.mr-select:focus{
@@ -181,6 +185,21 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
 .toggle input:checked+.toggle-track .toggle-thumb{left:22px;background:var(--cyan);box-shadow:0 0 10px rgba(34,211,238,.6)}
 .settings-footer{margin-top:24px;display:flex;align-items:center;gap:16px;padding-top:20px;border-top:1px solid var(--border)}
 .save-confirm{font-size:14px;color:var(--cyan);font-weight:600;display:none}
+.settings-nav{display:flex;gap:0;flex-wrap:nowrap;margin-bottom:18px;border-bottom:1px solid var(--border);overflow-x:auto}
+.settings-tab-btn{padding:12px 18px;border:none;background:none;color:var(--text1);font-size:13px;font-weight:600;display:inline-flex;align-items:center;gap:8px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:all .15s;font-family:var(--font);white-space:nowrap}
+.settings-tab-btn svg{width:15px;height:15px;stroke:currentColor}
+.settings-tab-btn:hover{color:var(--text0);background:rgba(255,255,255,.03)}
+.settings-tab-btn.active{color:var(--cyan);border-bottom-color:var(--cyan)}
+.settings-pane{display:none}
+.settings-pane.active{display:block}
+.java-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}
+.java-item{border:1px solid var(--border);background:var(--bg2);border-radius:10px;padding:14px}
+.java-item-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
+.java-item-title{font-weight:700;font-size:14px}
+.java-item-status{font-size:11px;color:var(--text2)}
+.java-item-path{font-family:var(--mono);font-size:11px;color:var(--text2);background:var(--bg0);padding:8px 10px;border:1px solid var(--border);border-radius:8px;min-height:34px;display:flex;align-items:center}
+.java-item-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.section-sep{height:1px;background:var(--border);margin:18px 0}
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 /* Auth */
@@ -667,32 +686,98 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
       <!-- SETTINGS -->
       <section class="page" id="page-settings">
         <div class="page-header"><div><h1 class="page-title" data-i18n="nav.settings">Paramètres</h1><p class="page-sub" data-i18n="settings.sub">Configuration du système</p></div></div>
-        <div class="settings-grid">
+        <div class="settings-nav" id="settings-nav">
+          <button class="settings-tab-btn active" data-settings-tab="updates"><svg viewBox="0 0 16 16" fill="none" stroke-width="1.6"><rect x="2.5" y="3" width="11" height="8.5" rx="1.6"/><path d="M6.2 13h3.6" stroke-linecap="round"/></svg><span data-i18n="settings.tab.launcher">Launcher</span></button>
+          <button class="settings-tab-btn" data-settings-tab="java"><svg viewBox="0 0 16 16" fill="none" stroke-width="1.6"><path d="M5 12.5h6M6 9c0 1.7 1 2.5 2 2.5s2-.8 2-2.5c0-1.1-.6-1.8-1.5-2.6M7.8 2.8c1.7.9-.6 2.2.7 3.1" stroke-linecap="round" stroke-linejoin="round"/></svg><span data-i18n="settings.tab.java">Java</span></button>
+          <button class="settings-tab-btn" data-settings-tab="defaults"><svg viewBox="0 0 16 16" fill="none" stroke-width="1.6"><rect x="2.5" y="2.5" width="11" height="11" rx="2"/><path d="M5 8h6" stroke-linecap="round"/></svg>Instance par défaut</button>
+          <button class="settings-tab-btn" data-settings-tab="resources"><svg viewBox="0 0 16 16" fill="none" stroke-width="1.6"><path d="M3 3.5h10v3H3zM3 9.5h10v3H3z"/><path d="M5.5 5h0M5.5 11h0" stroke-linecap="round"/></svg><span data-i18n="settings.tab.resources">Ressources</span></button>
+        </div>
+
+        <div class="settings-pane" id="settings-pane-java">
           <div class="settings-card">
-            <h3 data-i18n="settings.perf">Performances</h3>
+            <h3 data-i18n="settings.java.title">Installations Java</h3>
+            <div class="form-hint">Chaque ligne peut utiliser le Java détecté automatiquement ou un binaire personnalisé. Utilisez Test pour valider rapidement.</div>
+            <div class="java-grid" style="margin-top:14px">
+              <div class="java-item" data-java-major="8"><div class="java-item-head"><span class="java-item-title">Java 8</span><span class="java-item-status" id="java-status-8">—</span></div><div class="java-item-path" id="java-path-8">—</div><div class="java-item-actions"><button class="btn-ghost" id="java-install-8">Install Recommended</button><button class="btn-ghost" id="java-browse-8">Browse</button><button class="btn-ghost" id="java-test-8">Test</button></div></div>
+              <div class="java-item" data-java-major="17"><div class="java-item-head"><span class="java-item-title">Java 17</span><span class="java-item-status" id="java-status-17">—</span></div><div class="java-item-path" id="java-path-17">—</div><div class="java-item-actions"><button class="btn-ghost" id="java-install-17">Install Recommended</button><button class="btn-ghost" id="java-browse-17">Browse</button><button class="btn-ghost" id="java-test-17">Test</button></div></div>
+              <div class="java-item" data-java-major="21"><div class="java-item-head"><span class="java-item-title">Java 21</span><span class="java-item-status" id="java-status-21">—</span></div><div class="java-item-path" id="java-path-21">—</div><div class="java-item-actions"><button class="btn-ghost" id="java-install-21">Install Recommended</button><button class="btn-ghost" id="java-browse-21">Browse</button><button class="btn-ghost" id="java-test-21">Test</button></div></div>
+              <div class="java-item" data-java-major="25"><div class="java-item-head"><span class="java-item-title">Java 25</span><span class="java-item-status" id="java-status-25">—</span></div><div class="java-item-path" id="java-path-25">—</div><div class="java-item-actions"><button class="btn-ghost" id="java-install-25">Install Recommended</button><button class="btn-ghost" id="java-browse-25">Browse</button><button class="btn-ghost" id="java-test-25">Test</button></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-pane" id="settings-pane-defaults">
+          <div class="settings-card">
+            <h3>Paramètres d’instance par défaut</h3>
+            <div class="form-hint">Ces valeurs s’appliquent quand une instance n’a pas d’override local dans ses paramètres.</div>
+            <div class="section-sep"></div>
+            <div class="toggle-row">
+              <div><div class="form-label" style="margin:0">Fullscreen</div><div class="form-hint" style="margin-top:4px">Lance Minecraft en mode plein écran.</div></div>
+              <label class="toggle"><input type="checkbox" id="def-fullscreen"/><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+            </div>
+            <div class="section-sep"></div>
+            <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px">
+              <div class="form-group"><label class="form-label" for="def-width" data-i18n="settings.defaults.width">Width</label><input type="number" class="form-input" id="def-width" min="320" max="8192" step="1"/></div>
+              <div class="form-group"><label class="form-label" for="def-height" data-i18n="settings.defaults.height">Height</label><input type="number" class="form-input" id="def-height" min="240" max="8192" step="1"/></div>
+            </div>
             <div class="form-group">
               <label class="form-label"><span data-i18n="settings.ram_label">RAM allouée</span> — <span class="accent" id="ram-val">4 GB</span> <span id="ram-system-info" style="font-size:11px;color:var(--text2);font-weight:400"></span></label>
-              <input type="range" id="inp-ram" min="1" max="32" step="1" value="4" aria-label="RAM globale allouée"/>
+              <input type="range" id="inp-ram" min="1" max="32" step="1" value="4" aria-label="RAM par défaut allouée"/>
               <div id="ram-warning" style="display:none;margin-top:10px;padding:10px 14px;border-radius:var(--r-sm);background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);color:var(--orange);font-size:12px;font-weight:600;line-height:1.5"></div>
               <div class="form-hint" data-i18n="settings.ram_hint">Recommandé : 4-8 GB pour Forge, 2-4 GB pour Fabric.</div>
             </div>
-          </div>
-          <div class="settings-card">
-            <h3 data-i18n="settings.datadir">Dossier de données</h3>
             <div class="form-group">
-              <label class="form-label" data-i18n="settings.datadir_label">Chemin Paroxysm</label>
-              <div class="path-row"><span class="path-display" id="data-path">~/.paroxysm</span><button class="btn-ghost" id="btn-open-dir" data-i18n="settings.btn.opendir">Ouvrir</button></div>
+              <label class="form-label" for="def-java-args" data-i18n="settings.defaults.java_args">Java arguments</label>
+              <input type="text" class="form-input" id="def-java-args" placeholder="-XX:+UseG1GC ..."/>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="def-env-vars" data-i18n="settings.defaults.env_vars">Environment variables</label>
+              <textarea class="form-input" id="def-env-vars" rows="4" placeholder="EXAMPLE_FLAG=true&#10;HTTP_PROXY=http://127.0.0.1:8080"></textarea>
+              <div class="form-hint" data-i18n="settings.defaults.env_vars_hint">Une variable par ligne au format KEY=VALUE.</div>
             </div>
           </div>
-          <div class="settings-card" style="grid-column:1/-1">
-            <h3 data-i18n="settings.cf_key">Clé API CurseForge</h3>
-            <div class="form-group" style="max-width:50%">
-              <label class="form-label">API Key <span style="font-weight:400;color:var(--text2);font-size:12px" data-i18n="settings.cf_key_opt">(optionnel)</span></label>
-              <input type="password" class="form-input" id="inp-cf-key" placeholder="$2a$10$..." aria-label="Clé API CurseForge"/>
-              <div class="form-hint" data-i18n-html="settings.cf_key_hint_full">Améliore la fiabilité des téléchargements. Obtenez une clé gratuite sur <a id="cf-link" href="#">console.curseforge.com</a>.</div>
+        </div>
+
+        <div class="settings-pane" id="settings-pane-resources">
+          <div class="settings-grid">
+            <div class="settings-card">
+              <h3 data-i18n="settings.resources.title">Resource management</h3>
+              <div class="form-group">
+                <label class="form-label" data-i18n="settings.resources.app_dir">App directory</label>
+                <div class="path-row"><span class="path-display" id="data-path">~/.paroxysm</span><button class="btn-ghost" id="btn-open-dir" title="Browse" aria-label="Open app directory"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><path d="M2 11.5h10M7 2v7M4.5 6.5L7 9l2.5-2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
+              </div>
+              <div class="form-group">
+                <label class="form-label" data-i18n="settings.resources.app_cache">App cache</label>
+                <div class="path-row"><span class="path-display" id="cache-path">~/.paroxysm/cache</span><button class="btn-ghost" id="btn-purge-cache" data-i18n="settings.resources.purge">Purge</button></div>
+                <div class="form-hint" id="cache-size">—</div>
+              </div>
+            </div>
+            <div class="settings-card">
+              <h3 data-i18n="settings.resources.concurrency">Concurrency</h3>
+              <div class="form-group">
+                <label class="form-label" for="inp-max-downloads" data-i18n="settings.resources.max_downloads">Maximum concurrent downloads</label>
+                <input type="number" class="form-input" id="inp-max-downloads" min="1" max="16" step="1"/>
+                <div class="form-hint">Nombre de téléchargements réseau simultanés pendant les installations.</div>
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="inp-max-writes" data-i18n="settings.resources.max_writes">Maximum concurrent writes</label>
+                <input type="number" class="form-input" id="inp-max-writes" min="1" max="16" step="1"/>
+                <div class="form-hint">Limite les écritures disque parallèles pour réduire la charge I/O.</div>
+              </div>
+            </div>
+            <div class="settings-card" style="grid-column:1/-1">
+              <h3 data-i18n="settings.cf_key">Clé API CurseForge</h3>
+              <div class="form-group">
+                <label class="form-label"><span data-i18n="settings.cf_key_label">API Key</span> <span style="font-weight:400;color:var(--text2);font-size:12px" data-i18n="settings.cf_key_opt">(optionnel)</span></label>
+                <input type="password" class="form-input" id="inp-cf-key" placeholder="$2a$10$..." aria-label="Clé API CurseForge"/>
+                <div class="form-hint" data-i18n-html="settings.cf_key_hint_full">Améliore la fiabilité des téléchargements. Obtenez une clé gratuite sur <a id="cf-link" href="#">console.curseforge.com</a>.</div>
+              </div>
             </div>
           </div>
-          <!-- Language selector -->
+        </div>
+
+        <div class="settings-pane active" id="settings-pane-updates">
+          <div class="settings-grid">
           <div class="settings-card">
             <h3 data-i18n="settings.language">Langue</h3>
             <div class="form-group" style="max-width:320px">
@@ -702,10 +787,21 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
                 <option value="en">English</option>
               </select>
             </div>
+            <div class="section-sep"></div>
+            <div class="toggle-row">
+              <div>
+                <div class="form-label" style="margin:0" data-i18n="settings.rpc.toggle">Discord Rich Presence</div>
+                <div class="form-hint" style="margin-top:4px" data-i18n="settings.rpc.toggle_hint">Affiche ton statut dans Discord (bibliothèque, navigation, jeu en cours).</div>
+              </div>
+              <label class="toggle">
+                <input type="checkbox" id="inp-rpc-enabled"/>
+                <span class="toggle-track"><span class="toggle-thumb"></span></span>
+              </label>
+            </div>
           </div>
-          <div class="settings-card">
+          <div class="settings-card" style="grid-column:1/-1">
             <h3 data-i18n="settings.updates">Mises a jour</h3>
-            <div class="form-group" style="max-width:520px">
+            <div class="form-group">
               <label class="form-label" for="inp-update-channel" data-i18n="settings.update_channel">Canal de mise a jour</label>
               <select class="form-input" id="inp-update-channel">
                 <option value="stable" data-i18n="settings.update_channel_stable">Stable</option>
@@ -719,7 +815,9 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
               </div>
             </div>
           </div>
+          </div>
         </div>
+
         <div class="settings-footer">
           <button class="btn-primary" id="btn-save-settings"><span data-i18n="settings.btn.save">Sauvegarder</span></button>
           <span class="save-confirm" id="save-confirm-settings" data-i18n="settings.saved">✓ Sauvegardé</span>
@@ -763,19 +861,19 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
   <!-- Navigation tabs -->
   <div class="pp-nav">
     <button class="pp-nav-btn active" data-pptab="overview">
-      <svg viewBox="0 0 16 16" fill="none" stroke-width="1.5"><rect x="1" y="1" width="6" height="6" rx="1"/><rect x="9" y="1" width="6" height="6" rx="1"/><rect x="1" y="9" width="6" height="6" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="1" width="6" height="6" rx="1"/><rect x="9" y="1" width="6" height="6" rx="1"/><rect x="1" y="9" width="6" height="6" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>
       <span data-i18n="pack.tab.overview">Vue d'ensemble</span>
     </button>
     <button class="pp-nav-btn" data-pptab="content">
-      <svg viewBox="0 0 16 16" fill="none" stroke-width="1.5"><path d="M2 4h12M2 8h12M2 12h8"/></svg>
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12M2 8h12M2 12h8"/></svg>
       <span data-i18n="pack.tab.content">Contenu</span>
     </button>
     <button class="pp-nav-btn" data-pptab="logs">
-      <svg viewBox="0 0 16 16" fill="none" stroke-width="1.5"><rect x="2" y="2" width="12" height="12" rx="1"/><path d="M5 6h6M5 9h4"/></svg>
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="12" height="12" rx="1"/><path d="M5 6h6M5 9h4"/></svg>
       <span data-i18n="pack.tab.logs">Logs</span>
     </button>
     <button class="pp-nav-btn" data-pptab="settings">
-      <svg viewBox="0 0 16 16" fill="none" stroke-width="1.5"><circle cx="8" cy="8" r="2.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.2 3.2l1.4 1.4M11.4 11.4l1.4 1.4M3.2 12.8l1.4-1.4M11.4 4.6l1.4-1.4"/></svg>
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="2.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.2 3.2l1.4 1.4M11.4 11.4l1.4 1.4M3.2 12.8l1.4-1.4M11.4 4.6l1.4-1.4"/></svg>
       <span data-i18n="pack.tab.settings">Paramètres</span>
     </button>
   </div>
@@ -890,6 +988,24 @@ input[type="range"]::-webkit-slider-thumb:hover{transform:scale(1.2)}
             <div class="form-hint"><span data-i18n="pack.settings.ram_hint">0 = utiliser la valeur globale des</span>
               <button class="nav-btn btn-inline" data-page="settings" data-i18n="pack.settings.ram_hint2">paramètres.</button>
               <span data-i18n="pack.settings.ram_hint3">Sinon, définit une valeur spécifique pour ce modpack uniquement.</span></div>
+          </div>
+          <div class="section-sep"></div>
+          <div class="toggle-row">
+            <div><div class="form-label" style="margin:0">Fullscreen</div><div class="form-hint" style="margin-top:4px">Override local de l’instance.</div></div>
+            <label class="toggle"><input type="checkbox" id="pack-fullscreen"/><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+          </div>
+          <div class="section-sep"></div>
+          <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px">
+            <div class="form-group"><label class="form-label" for="pack-width" data-i18n="pack.settings.width">Width</label><input type="number" class="form-input" id="pack-width" min="320" max="8192" step="1"/></div>
+            <div class="form-group"><label class="form-label" for="pack-height" data-i18n="pack.settings.height">Height</label><input type="number" class="form-input" id="pack-height" min="240" max="8192" step="1"/></div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="pack-java-args" data-i18n="pack.settings.java_args">Java arguments</label>
+            <input type="text" class="form-input" id="pack-java-args" placeholder="-XX:+UseG1GC ..."/>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="pack-env-vars" data-i18n="pack.settings.env_vars">Environment variables</label>
+            <textarea class="form-input" id="pack-env-vars" rows="3" placeholder="EXAMPLE_FLAG=true&#10;HTTP_PROXY=http://127.0.0.1:8080"></textarea>
           </div>
         </div>
 
