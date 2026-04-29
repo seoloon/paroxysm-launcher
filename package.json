@@ -1,6 +1,6 @@
 {
   "name": "paroxysm-launcher",
-  "version": "PLAYTEST--1.0.0-alpha",
+  "version": "1.0.0-playtest.1",
   "description": "Paroxysm Launcher — The final Minecraft launcher",
   "author": "Seoloon",
   "main": "src/main.js",
@@ -73,8 +73,11 @@
       "allowToChangeInstallationDirectory": true,
       "shortcutName": "Paroxysm Launcher",
       "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
       "installerIcon": "assets/icon.ico",
       "uninstallerIcon": "assets/icon.ico",
+      "license": "LICENSE.md",
+      "runAfterFinish": true,
       "artifactName": "Paroxysm-Setup-${version}.${ext}"
     },
     "generateUpdatesFilesForAllChannels": true,
