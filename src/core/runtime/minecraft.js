@@ -20,6 +20,10 @@ const ASSETS_DIR   = path.join(MC_DIR, 'assets');
 const MANIFEST_URL = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json';
 
 class MinecraftManager {
+  static async ensureLibraries(libraries = [], onProgress = () => {}) {
+    await MinecraftManager._downloadLibraries(Array.isArray(libraries) ? libraries : [], onProgress);
+  }
+
   /**
    * Ensure the vanilla client JAR and version JSON are present.
    * Also downloads the assets index (not individual assets — too large).
