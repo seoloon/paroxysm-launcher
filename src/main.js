@@ -204,6 +204,48 @@ function estimateRequiredJavaMajor(mcVersion, vanillaProfile = null) {
   return 21;
 }
 
+function versionProfilePath(versionId) {
+  return path.join(Store.BASE_DIR, 'minecraft', 'versions', versionId, `${versionId}.json`);
+}
+
+function hasVersionProfile(versionId) {
+  if (!versionId) return false;
+  return fs.existsSync(versionProfilePath(versionId));
+}
+
+async function ensureLaunchVersionId(entry, javaPath) {
+  const loader = String(entry?.modloader || 'vanilla').toLowerCase();
+  const mcVersion = String(entry?.mcVersion || '').trim();
+  const versionId = String(entry?.versionId || '').trim();
+  const loaderVersion = String(entry?.modloaderVersion || '').trim();
+
+  if (!mcVersion) throw new Error('Version Minecraft manquante');
+
+  if (loader === 'vanilla') {
+    if (!hasVersionProfile(mcVersion)) {
+      await MinecraftManager.ensureVanilla(mcVersion, () => {});
+    }
+    return mcVersion;
+  }
+
+  if (versionId && hasVersionProfile(versionId)) return versionId;
+
+  if (!loaderVersion) {
+    throw new Error(`Version du modloader manquante pour ${loader}`);
+  }
+
+  if (loader === 'fabric' || loader === 'quilt') {
+    return await FabricManager.ensure(mcVersion, loaderVersion, javaPath, () => {}, loader);
+  }
+  if (loader === 'neoforge') {
+    return await NeoForgeManager.ensure(mcVersion, loaderVersion, javaPath, () => {});
+  }
+  if (loader === 'forge') {
+    return await ForgeManager.ensure(mcVersion, loaderVersion, javaPath, () => {});
+  }
+  throw new Error(`Modloader inconnu: ${loader}`);
+}
+
 let mainWindow = null;
 let discordPresence = null;
 let runningGameChild = null;
@@ -1442,6 +1484,11 @@ ipcMain.handle('game:launch', async (_, modpackId) => {
       javaPath = await JavaManager.ensureJava(entry.mcVersion, () => {}, vanillaProfile);
     }
 
+    const ensuredVersionId = await ensureLaunchVersionId(entry, javaPath);
+    const launchEntry = ensuredVersionId === entry.versionId
+      ? entry
+      : { ...entry, versionId: ensuredVersionId };
+
     const defaults = settings.instanceDefaults || {};
     const defaultRam = Math.max(1, Math.min(32, Math.round(+defaults.ram || settings.ram || 4)));
     const instanceRam = Number.isFinite(+entry.ram) ? +entry.ram : 0;
@@ -1458,7 +1505,7 @@ ipcMain.handle('game:launch', async (_, modpackId) => {
     const extraEnv = parseEnvVars(envVarsSource);
 
     const child = await GameLauncher.launch({
-      entry,
+      entry: launchEntry,
       javaPath,
       profile:     useOnline ? profile      : null,
       accessToken: useOnline ? auth.getStoredToken() : null,
@@ -1660,8 +1707,8 @@ ipcMain.handle('instance:create', async (_, { name, mcVersion, loader, loaderVer
     const seeded = library.update(entry.id, {
       ram: Number.isFinite(+d.ram) ? Math.max(1, Math.min(32, Math.round(+d.ram))) : entry.ram,
       fullscreen: !!d.fullscreen,
-      windowWidth: Number.isFinite(+d.width) ? Math.max(320, Math.min(8192, Math.round(+d.width))) : 1280,
-      windowHeight: Number.isFinite(+d.height) ? Math.max(240, Math.min(8192, Math.round(+d.height))) : 720,
+      windowWidth: null,
+      windowHeight: null,
       javaArgs: typeof d.javaArgs === 'string' ? d.javaArgs : '',
       envVars: typeof d.envVars === 'string' ? d.envVars : '',
     });
