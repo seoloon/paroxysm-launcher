@@ -18,6 +18,7 @@ const fs    = require('fs');
 const path  = require('path');
 const { spawn } = require('child_process');
 const Store = require('../utils/store');
+const MinecraftManager = require('./minecraft');
 
 const MC_BASE      = path.join(Store.BASE_DIR, 'minecraft');
 const VERSIONS_DIR = path.join(MC_BASE, 'versions');
@@ -43,6 +44,9 @@ class GameLauncher {
     const loaderJson  = loadVersionJson(versionId);
     const vanillaJson = loaderJson.inheritsFrom ? loadVersionJson(loaderJson.inheritsFrom) : {};
     const merged      = mergeProfiles(vanillaJson, loaderJson);
+
+    // Self-heal missing runtime libraries (works for vanilla + all modloaders).
+    await MinecraftManager.ensureLibraries(merged.libraries || [], () => {});
 
     // ── Extract natives ───────────────────────────────────────────────────────
     const nativesDir = path.join(VERSIONS_DIR, versionId, 'natives');
@@ -147,8 +151,22 @@ class GameLauncher {
       return true;
     });
 
+    // Legacy vanilla versions (e.g. 1.8.9) may not provide modern JVM args with -cp.
+    // In that case, inject a classpath explicitly so Java can resolve mainClass.
+    const hasClasspathArg = (() => {
+      for (let i = 0; i < filteredJvmArgs.length; i++) {
+        const a = String(filteredJvmArgs[i] || '');
+        if (a === '-cp' || a === '-classpath') return true;
+        if (a.startsWith('-cp=') || a.startsWith('-classpath=')) return true;
+      }
+      return false;
+    })();
+    const effectiveJvmArgs = hasClasspathArg
+      ? filteredJvmArgs
+      : ['-cp', legacyClasspath, ...filteredJvmArgs];
+
     // Full command: base perf flags + loader JVM args + main class + game args
-    const fullArgs = [...baseJvmArgs, ...(Array.isArray(extraJvmArgs) ? extraJvmArgs : []), ...filteredJvmArgs, mainClass, ...finalGameArgs].filter(Boolean);
+    const fullArgs = [...baseJvmArgs, ...(Array.isArray(extraJvmArgs) ? extraJvmArgs : []), ...effectiveJvmArgs, mainClass, ...finalGameArgs].filter(Boolean);
 
     console.log('[launch] java:      ', javaPath, `(v${javaVersion})`);
     console.log('[launch] mainClass: ', mainClass);
@@ -184,9 +202,10 @@ class GameLauncher {
  * The modloader parameter controls which behaviour to use.
  */
 function buildLegacyClasspath(libraries, mcVersion, versionId, modloader) {
-  const seen    = new Set();
-  const paths   = [];
-  const isForge = modloader === 'forge' || modloader === 'neoforge';
+  const seenPath = new Set();
+  const seenGA   = new Set();
+  const paths    = [];
+  const isForge  = modloader === 'forge' || modloader === 'neoforge';
 
   // For Forge: these go on -p via Forge's own JVM args — exclude from -cp
   const FORGE_MODULE_PATH_ONLY = new Set([
@@ -203,6 +222,7 @@ function buildLegacyClasspath(libraries, mcVersion, versionId, modloader) {
     const nameParts  = (lib.name || '').split(':');
     const groupArt   = `${nameParts[0]}:${nameParts[1]}`;
     const classifier = nameParts[3] || '';
+    const dedupKey   = `${groupArt}:${classifier}`;
 
     // Natives go to nativesDir via extractNatives(), NOT on the classpath
     if (classifier.startsWith('natives-')) continue;
@@ -210,16 +230,21 @@ function buildLegacyClasspath(libraries, mcVersion, versionId, modloader) {
     // For Forge: these are placed on -p (module path) by Forge's own JVM args
     if (isForge && FORGE_MODULE_PATH_ONLY.has(groupArt)) continue;
 
+    // Avoid runtime duplicates like ASM 9.6 + 9.9 on Fabric classpath.
+    // Keep first occurrence (loader libs are ordered before vanilla libs).
+    if (nameParts.length >= 3 && seenGA.has(dedupKey)) continue;
+    if (nameParts.length >= 3) seenGA.add(dedupKey);
+
     const p = resolveLibPath(lib);
-    if (p && fs.existsSync(p) && !seen.has(p)) { seen.add(p); paths.push(p); }
+    if (p && fs.existsSync(p) && !seenPath.has(p)) { seenPath.add(p); paths.push(p); }
   }
 
   // Fabric needs minecraft.jar explicitly on -cp
   // Forge must NOT have it on -cp (it goes on -p via Forge's args)
   if (!isForge) {
     const clientJar = path.join(VERSIONS_DIR, mcVersion, `${mcVersion}.jar`);
-    if (fs.existsSync(clientJar) && !seen.has(clientJar)) {
-      seen.add(clientJar);
+    if (fs.existsSync(clientJar) && !seenPath.has(clientJar)) {
+      seenPath.add(clientJar);
       paths.push(clientJar);
     }
   }
@@ -327,13 +352,10 @@ function makeWritableRecursive(target) {
 
 // ── mergeProfiles ──────────────────────────────────────────────────────────────
 function mergeProfiles(vanilla, loader) {
-  // Deduplicate by exact full Maven coordinate (classifier included).
-  const seen = new Set();
-  const libs = [];
-  for (const lib of [...(loader.libraries || []), ...(vanilla.libraries || [])]) {
-    const key = lib.name || JSON.stringify(lib);
-    if (!seen.has(key)) { seen.add(key); libs.push(lib); }
-  }
+  // Keep all library declarations here.
+  // Filtering/deduplication must happen later with OS/rules awareness; doing it
+  // too early can drop the valid platform-specific LWJGL entry on vanilla 1.16.
+  const libs = [...(loader.libraries || []), ...(vanilla.libraries || [])];
   return {
     mainClass:          loader.mainClass          || vanilla.mainClass,
     minecraftArguments: loader.minecraftArguments || vanilla.minecraftArguments,
