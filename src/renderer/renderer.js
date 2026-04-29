@@ -6,6 +6,7 @@ const px=window.px;
 const t=(key,vars)=>window.i18n?window.i18n.t(key,vars):key;
 let allPacks=[],currentPack=null,isInstalling=false,isGameRunning=false,gameLogCb=null,gameCloseCb=null;
 let runningGamePackId=null,runningGamePid=null;
+let mrVersionsLoaded=false;
 
 function $(id){return document.getElementById(id);}
 function esc(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -131,6 +132,9 @@ async function copyToClipboard(text){
 const toastRoot=$('toast-root')||(()=>{const el=document.createElement('div');el.id='toast-root';document.body.appendChild(el);return el;})();
 function notify(message,type='info',timeout=3400){
   if(!message)return;
+  while(toastRoot.children.length>=5){
+    toastRoot.firstElementChild?.remove();
+  }
   const toast=document.createElement('div');
   toast.className='toast toast-'+type;
   toast.setAttribute('role','status');
@@ -251,15 +255,29 @@ $('btn-max').addEventListener('click',()=>px.win.maximize());
 $('btn-close').addEventListener('click',()=>px.win.close());
 
 // Navigation
+const pageNodes = Array.from(document.querySelectorAll('.page'));
+const navNodes = Array.from(document.querySelectorAll('.nav-btn'));
+const navNodesByPage = Array.from(document.querySelectorAll('[data-page]'));
+
 function showPage(name){
   // Fermer la page dédiée modpack si elle est ouverte — on revient à la navigation normale
   if($('pack-page').classList.contains('open')) closePackPage();
-  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
+  pageNodes.forEach(p=>p.classList.remove('active'));
+  navNodes.forEach(b=>b.classList.remove('active'));
   $('page-'+name)?.classList.add('active');
-  document.querySelectorAll('[data-page="'+name+'"]').forEach(b=>b.classList.add('active'));
+  navNodesByPage.forEach(b=>{
+    if(b.dataset.page===name)b.classList.add('active');
+  });
   if(name==='library'){loadLibrary().catch(()=>{});}
-  if(name==='browse' && mrState.firstLoad){mrState.firstLoad=false; mrSearch();}
+  if(name==='browse' && mrState.firstLoad){
+    mrState.firstLoad=false;
+    const runSearch=()=>mrSearch();
+    if(!mrVersionsLoaded){
+      loadMrVersions().finally(runSearch);
+    }else{
+      runSearch();
+    }
+  }
   px.rpc?.setPage?.(name).catch?.(()=>{});
 }
 document.querySelectorAll('.nav-btn, .account-mini').forEach(btn=>{
@@ -849,6 +867,11 @@ async function openPackPage(pack) {
   // Settings tab pre-fill
   $('pack-custom-name').value = pack.customName || '';
   $('pack-notes').value = pack.notes || '';
+  $('pack-fullscreen').checked = !!pack.fullscreen;
+  $('pack-width').value = Number.isFinite(+pack.windowWidth) ? Math.max(320, Math.min(8192, Math.round(+pack.windowWidth))) : 1280;
+  $('pack-height').value = Number.isFinite(+pack.windowHeight) ? Math.max(240, Math.min(8192, Math.round(+pack.windowHeight))) : 720;
+  $('pack-java-args').value = pack.javaArgs || '';
+  $('pack-env-vars').value = pack.envVars || '';
   const packRamMax = _systemRamGB > 0 ? Math.max(1, Math.floor(_systemRamGB)) : 32;
   $('pack-ram').max = packRamMax;
   const packRam = pack.ram || 0;
@@ -1221,6 +1244,17 @@ $('pack-save-settings').addEventListener('click', async function() {
       const value = parseInt($('pack-ram').value, 10) || 0;
       return Math.max(0, Math.min(value, max));
     })(),
+    fullscreen: $('pack-fullscreen').checked,
+    windowWidth: (() => {
+      const v = parseInt($('pack-width').value, 10) || 1280;
+      return Math.max(320, Math.min(8192, v));
+    })(),
+    windowHeight: (() => {
+      const v = parseInt($('pack-height').value, 10) || 720;
+      return Math.max(240, Math.min(8192, v));
+    })(),
+    javaArgs: String($('pack-java-args').value || '').trim().slice(0, 4000),
+    envVars: String($('pack-env-vars').value || '').trim().slice(0, 8000),
     iconData:   packIconDataPending !== null ? packIconDataPending : packPagePack.iconData,
   };
 
@@ -1415,12 +1449,175 @@ async function initUpdaterUi(){
   if (state) renderUpdateState(state);
 }
 
+function fmtBytes(bytes){
+  const n = Number(bytes || 0);
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function applySettingsI18nOverrides(){
+  const setText = (selector, key) => {
+    const el = document.querySelector(selector);
+    if (el) el.textContent = t(key);
+  };
+
+  setText('#settings-pane-java .settings-card > .form-hint', 'settings.java.hint');
+  setText('#settings-pane-defaults .settings-card > h3', 'settings.defaults.title');
+  setText('#settings-pane-defaults .settings-card > .form-hint', 'settings.defaults.hint');
+  setText('#settings-pane-defaults .toggle-row .form-label', 'settings.defaults.fullscreen');
+  setText('#settings-pane-defaults .toggle-row .form-hint', 'settings.defaults.fullscreen_hint');
+
+  const defaultsTabBtn = document.querySelector('[data-settings-tab="defaults"]');
+  if (defaultsTabBtn) {
+    const icon = defaultsTabBtn.querySelector('svg');
+    let label = defaultsTabBtn.querySelector('.settings-tab-label');
+    if (!label) {
+      label = document.createElement('span');
+      label.className = 'settings-tab-label';
+    }
+    if (icon) {
+      defaultsTabBtn.textContent = '';
+      defaultsTabBtn.appendChild(icon);
+      defaultsTabBtn.appendChild(label);
+    }
+    label.textContent = t('settings.tab.defaults');
+  }
+
+  ['8', '17', '21', '25'].forEach(major => {
+    const installBtn = $(`java-install-${major}`);
+    const browseBtn = $(`java-browse-${major}`);
+    const testBtn = $(`java-test-${major}`);
+    if (installBtn) installBtn.textContent = t('settings.java.btn.install');
+    if (browseBtn) browseBtn.textContent = t('settings.java.btn.browse');
+    if (testBtn) testBtn.textContent = t('settings.java.btn.test');
+  });
+
+  const dlHint = document.querySelector('label[for="inp-max-downloads"]')?.parentElement?.querySelector('.form-hint');
+  if (dlHint) dlHint.textContent = t('settings.resources.max_downloads_hint');
+  const wrHint = document.querySelector('label[for="inp-max-writes"]')?.parentElement?.querySelector('.form-hint');
+  if (wrHint) wrHint.textContent = t('settings.resources.max_writes_hint');
+
+  const packFsToggle = $('pack-fullscreen')?.closest('.toggle-row');
+  if (packFsToggle) {
+    const label = packFsToggle.querySelector('.form-label');
+    const hint = packFsToggle.querySelector('.form-hint');
+    if (label) label.textContent = t('pack.settings.fullscreen');
+    if (hint) hint.textContent = t('pack.settings.fullscreen_hint');
+  }
+}
+
+function ensureRpcCardInLauncherSettings(){
+  const pane = $('settings-pane-updates');
+  if (!pane) return;
+  const grid = pane.querySelector('.settings-grid');
+  if (!grid) return;
+
+  const languageCard = grid.children[0];
+  const updatesCard = grid.querySelector('.settings-card[style*="grid-column:1/-1"]');
+  if (!languageCard || !updatesCard) return;
+
+  let rpcCard = $('rpc-settings-card');
+  if (!rpcCard) {
+    rpcCard = document.createElement('div');
+    rpcCard.className = 'settings-card';
+    rpcCard.id = 'rpc-settings-card';
+
+    const title = document.createElement('h3');
+    title.dataset.i18n = 'settings.rpc.toggle';
+    title.textContent = t('settings.rpc.toggle');
+    rpcCard.appendChild(title);
+  }
+
+  const toggleRow = languageCard.querySelector('.toggle-row');
+  if (toggleRow && !rpcCard.contains(toggleRow)) {
+    rpcCard.appendChild(toggleRow);
+  }
+
+  const sep = languageCard.querySelector('.section-sep');
+  if (sep) sep.remove();
+
+  if (rpcCard.parentElement !== grid) {
+    grid.insertBefore(rpcCard, updatesCard);
+  }
+}
+
+function switchSettingsTab(tab){
+  document.querySelectorAll('[data-settings-tab]').forEach(btn=>{
+    btn.classList.toggle('active', btn.dataset.settingsTab === tab);
+  });
+  document.querySelectorAll('.settings-pane').forEach(pane=>{
+    pane.classList.toggle('active', pane.id === `settings-pane-${tab}`);
+  });
+}
+
+async function refreshResourceInfo(){
+  if (!px.resources || typeof px.resources.info !== 'function') return;
+  const info = await px.resources.info().catch(()=>null);
+  if (!info) return;
+  $('data-path').textContent = info.appDir || '~/.paroxysm';
+  $('cache-path').textContent = info.cacheDir || '~/.paroxysm/cache';
+  $('cache-size').textContent = t('settings.resources.cache_size', { size: fmtBytes(info.cacheSizeBytes || 0) });
+}
+
+function renderJavaRow(major, row){
+  const pathEl = $(`java-path-${major}`);
+  const statusEl = $(`java-status-${major}`);
+  if (!pathEl || !statusEl) return;
+  const configured = row?.configured;
+  const auto = row?.auto;
+  const effective = row?.effectivePath || configured?.path || auto?.path || '';
+
+  pathEl.textContent = effective || t('settings.java.status.not_found');
+  if (configured?.path) {
+    statusEl.textContent = configured.valid
+      ? t('settings.java.status.custom_ok', { major: configured.major })
+      : t('settings.java.status.custom_invalid', { reason: configured.reason ? `: ${configured.reason}` : '' });
+    statusEl.style.color = configured.valid ? 'var(--green)' : 'var(--orange)';
+    return;
+  }
+  if (auto?.path) {
+    statusEl.textContent = t('settings.java.status.auto', { source: auto.source, version: auto.version || '?' });
+    statusEl.style.color = 'var(--cyan)';
+    return;
+  }
+  statusEl.textContent = t('settings.java.status.missing');
+  statusEl.style.color = 'var(--text2)';
+}
+
+async function refreshJavaInstallations(){
+  if (!px.java || typeof px.java.listInstallations !== 'function') return;
+  const data = await px.java.listInstallations().catch(()=>null);
+  if (!data || typeof data !== 'object') return;
+  ['8', '17', '21', '25'].forEach(major => renderJavaRow(major, data[major] || null));
+}
+
+async function handleJavaAction(kind, major){
+  if (!px.java) return;
+  const btn = $(`java-${kind}-${major}`);
+  if (btn) btn.disabled = true;
+  try {
+    let res = null;
+    if (kind === 'install' && typeof px.java.installRecommended === 'function') res = await px.java.installRecommended(major);
+    if (kind === 'browse' && typeof px.java.browse === 'function') res = await px.java.browse(major);
+    if (kind === 'test' && typeof px.java.test === 'function') res = await px.java.test(major);
+    if (res?.ok) notify(t('settings.java.action_ok', { major }), 'success', 1800);
+    else if (!res?.canceled) notifyError(res?.error || t('error.unknown'));
+  } finally {
+    if (btn) btn.disabled = false;
+    refreshJavaInstallations().catch(()=>{});
+  }
+}
+
 async function loadSettings(){
   const cfg=await px.config.get('settings')||{};
 
   // ── i18n: init language from saved config ──────────────────────────────────
   if(window.i18n){
     await window.i18n.initI18n(cfg);
+    ensureRpcCardInLauncherSettings();
+    applySettingsI18nOverrides();
     // lib-count is dynamic; i18n static pass sets "lib.loading", so re-render library values after init.
     renderLibrary(allPacks);
     // Reflect saved language on the selector
@@ -1443,14 +1640,26 @@ async function loadSettings(){
     }
   } catch {}
 
-  const savedRam = cfg.ram || 4;
+  const defaults = cfg.instanceDefaults || {};
+  const savedRam = defaults.ram || cfg.ram || 4;
   $('inp-ram').value = savedRam;
   $('ram-val').textContent = savedRam + ' GB';
   updateRamWarning(savedRam);
 
   $('inp-username').value=cfg.username||'';$('inp-force-offline').checked=cfg.forceOffline||false;$('inp-cf-key').value=cfg.cfApiKey||'';
+  if ($('inp-rpc-enabled')) $('inp-rpc-enabled').checked = cfg.discordRpcEnabled !== false;
+  $('def-fullscreen').checked = !!defaults.fullscreen;
+  $('def-width').value = defaults.width || 1280;
+  $('def-height').value = defaults.height || 720;
+  $('def-java-args').value = defaults.javaArgs || '';
+  $('def-env-vars').value = defaults.envVars || '';
+  const resources = cfg.resources || {};
+  $('inp-max-downloads').value = resources.maxConcurrentDownloads || 3;
+  $('inp-max-writes').value = resources.maxConcurrentWrites || 3;
   if ($('inp-update-channel')) $('inp-update-channel').value = cfg.updateChannel === 'beta' ? 'beta' : 'stable';
   await initUpdaterUi();
+  await refreshJavaInstallations();
+  await refreshResourceInfo();
   // Re-apply dynamic auth labels after i18n static pass.
   await refreshAuth();
 }
@@ -1491,14 +1700,36 @@ async function saveAllSettings(){
     username:$('inp-username').value.trim(),
     forceOffline:$('inp-force-offline').checked,
     cfApiKey:$('inp-cf-key').value.trim(),
+    discordRpcEnabled: $('inp-rpc-enabled') ? !!$('inp-rpc-enabled').checked : true,
     language:lang,
     updateChannel,
+    instanceDefaults: {
+      fullscreen: $('def-fullscreen').checked,
+      width: Math.max(320, Math.min(8192, parseInt($('def-width').value, 10) || 1280)),
+      height: Math.max(240, Math.min(8192, parseInt($('def-height').value, 10) || 720)),
+      ram: Math.max(1, Math.min(32, parseInt($('inp-ram').value, 10) || 4)),
+      javaArgs: String($('def-java-args').value || '').trim().slice(0, 4000),
+      envVars: String($('def-env-vars').value || '').trim().slice(0, 8000),
+    },
+    resources: {
+      maxConcurrentDownloads: Math.max(1, Math.min(16, parseInt($('inp-max-downloads').value, 10) || 3)),
+      maxConcurrentWrites: Math.max(1, Math.min(16, parseInt($('inp-max-writes').value, 10) || 3)),
+    },
   });
   document.querySelectorAll('.save-confirm').forEach(c=>{c.style.display='inline';setTimeout(()=>{c.style.display='none';},2000);});
 }
 $('btn-save-settings').addEventListener('click',saveAllSettings);
 $('btn-save-profile').addEventListener('click',saveAllSettings);
 $('btn-open-dir').addEventListener('click',async function(){const p=await px.config.get('__dataPath__');if(p)px.shell.open(p);});
+$('btn-purge-cache')?.addEventListener('click', async function(){
+  if (!px.resources || typeof px.resources.purgeCache !== 'function') return;
+  this.disabled = true;
+  const result = await px.resources.purgeCache().catch(()=>({ ok: false, error: t('error.unknown') }));
+  this.disabled = false;
+  if (!result?.ok) return notifyError(result?.error || t('error.unknown'));
+  notify(t('settings.resources.cache_purged'), 'success', 1600);
+  refreshResourceInfo().catch(()=>{});
+});
 $('btn-check-updates').addEventListener('click', async function(){
   if (!px.updates || typeof px.updates.check !== 'function') return;
   this.disabled = true;
@@ -1518,6 +1749,8 @@ $('inp-language')?.addEventListener('change',()=>{
   if(!window.i18n)return;
   const lang=String($('inp-language').value||'fr');
   window.i18n.setLang(lang);
+  ensureRpcCardInLauncherSettings();
+  applySettingsI18nOverrides();
   // Re-render dynamic content
   renderLibrary(allPacks);
   if(currentPack)openPlayPanel(currentPack);
@@ -1539,12 +1772,25 @@ $('inp-language')?.addEventListener('change',()=>{
     updatePackRamWarning(safe);
   }
   renderUpdateState(_lastUpdateState);
+  refreshJavaInstallations().catch(()=>{});
+  refreshResourceInfo().catch(()=>{});
   // Re-run refreshAuth so acct-name/acct-status show correct translated strings
   refreshAuth();
   saveAllSettings().catch(()=>{});
 });
-async function loadDataPath(){const p=await px.config.get('__dataPath__').catch(()=>null);if(p)$('data-path').textContent=p;}
 
+$('inp-rpc-enabled')?.addEventListener('change',()=>{
+  saveAllSettings().catch(()=>{});
+});
+
+document.querySelectorAll('[data-settings-tab]').forEach(btn=>{
+  btn.addEventListener('click',()=>switchSettingsTab(btn.dataset.settingsTab||'updates'));
+});
+['8','17','21','25'].forEach(major=>{
+  $(`java-install-${major}`)?.addEventListener('click',()=>handleJavaAction('install', major));
+  $(`java-browse-${major}`)?.addEventListener('click',()=>handleJavaAction('browse', major));
+  $(`java-test-${major}`)?.addEventListener('click',()=>handleJavaAction('test', major));
+});
 // ── Modrinth Browser ──────────────────────────────────────────────────────────
 const mrState={type:'modpack',page:0,limit:20,total:0,query:'',version:'',loader:'',sort:'relevance',firstLoad:true,loading:false,targetInstanceId:'',installedByType:null,needsRefresh:false,reqSeq:0};
 
@@ -1693,6 +1939,7 @@ async function loadMrVersions() {
       sel.appendChild(opt);
     });
     mrState.version = sel.value;
+    mrVersionsLoaded = true;
   } catch {}
 }
 
@@ -2442,13 +2689,12 @@ $('ci-create').addEventListener('click', async () => {
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 async function boot(){
-  await loadAppVersion();
-  await refreshAuth();
-  await loadLibrary();
+  await Promise.all([
+    loadAppVersion(),
+    refreshAuth(),
+    loadLibrary(),
+  ]);
   await loadSettings();
-  await loadDataPath();
-  await loadMrVersions();
-  mrSearch();
   px.rpc?.setPage?.('library').catch?.(()=>{});
 }
 boot().catch(e=>console.error('[boot]',e));
