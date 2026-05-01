@@ -341,20 +341,17 @@ app.whenReady().then(() => {
   discordPresence.start();
   discordPresence.setPage('library');
 });
-app.on('window-all-closed', () => {
+function stopDiscordPresence() {
   try { discordPresence?.stop(); } catch {}
+}
+app.on('window-all-closed', () => {
+  stopDiscordPresence();
   if (process.platform !== 'darwin') app.quit();
 });
 app.on('activate', () => { if (!mainWindow) createWindow(); });
-app.on('before-quit', () => {
-  try { discordPresence?.stop(); } catch {}
-});
-app.on('will-quit', () => {
-  try { discordPresence?.stop(); } catch {}
-});
-app.on('quit', () => {
-  try { discordPresence?.stop(); } catch {}
-});
+app.on('before-quit', stopDiscordPresence);
+app.on('will-quit', stopDiscordPresence);
+app.on('quit', stopDiscordPresence);
 
 const send = (ch, data) => mainWindow?.webContents?.send(ch, data);
 
@@ -479,7 +476,7 @@ function setupAutoUpdater() {
 
   if (!autoUpdater) {
     updaterReady = false;
-    const loadErrMsg = autoUpdaterLoadError && autoUpdaterLoadError.message ? autoUpdaterLoadError.message : '';
+    const loadErrMsg = autoUpdaterLoadError?.message || '';
     const loadErr = loadErrMsg ? ` (${loadErrMsg})` : '';
     setUpdaterState({
       available: false,
@@ -769,7 +766,12 @@ function scanInstanceFiles(entry, { includeConfig = true } = {}) {
       if (!item.isFile()) continue;
       const filePath = path.join(full, item.name);
       let size = 0;
-      try { size = fs.statSync(filePath).size; } catch {}
+      let mtimeMs = 0;
+      try {
+        const st = fs.statSync(filePath);
+        size = st.size;
+        mtimeMs = Number(st.mtimeMs || 0);
+      } catch {}
       const manifestEntry = manifest[item.name];
       const displayName = manifestEntry?.displayName || cleanFilename(item.name);
 
@@ -778,6 +780,7 @@ function scanInstanceFiles(entry, { includeConfig = true } = {}) {
         filename: item.name,
         type,
         size,
+        mtimeMs,
         dir,
         projectID: manifestEntry?.projectID,
         fileID: manifestEntry?.fileID,
@@ -793,51 +796,10 @@ ipcMain.handle('config:get', async (_, key) => {
   // Special key: scan instance files with name resolution from manifest
   if (key && key.startsWith('__instanceFiles__:')) {
     const packId = key.slice('__instanceFiles__:'.length);
-    const entry  = library.get(packId);
+    const entry = library.get(packId);
     if (!entry?.gameDir) return [];
     try {
-      // Load the manifest (filename → { displayName, projectID, fileID })
-      const manifestPath = path.join(entry.gameDir, 'mods-manifest.json');
-      let manifest = {};
-      try {
-        if (fs.existsSync(manifestPath))
-          manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-      } catch {}
-
-      const results = [];
-      const scanDirs = [
-        { dir: 'mods',          type: 'mod' },
-        { dir: 'shaderpacks',   type: 'shader' },
-        { dir: 'resourcepacks', type: 'resourcepack' },
-        { dir: 'config',        type: 'config' },
-      ];
-      for (const { dir, type } of scanDirs) {
-        const full = path.join(entry.gameDir, dir);
-        if (!fs.existsSync(full)) continue;
-        const items = fs.readdirSync(full, { withFileTypes: true });
-        for (const item of items) {
-          if (!item.isFile()) continue;
-          const filePath = path.join(full, item.name);
-          let size = 0;
-          try { size = fs.statSync(filePath).size; } catch {}
-
-          // Résoudre le nom d'affichage :
-          // 1. Manifeste (nom du mod CurseForge)
-          // 2. Nom du fichier tel quel (Modrinth / override files sont déjà lisibles)
-          const manifestEntry = manifest[item.name];
-          const displayName   = manifestEntry?.displayName || cleanFilename(item.name);
-
-          results.push({
-            name:        displayName,   // nom affiché
-            filename:    item.name,     // nom réel du fichier
-            type,
-            size,
-            dir,
-            projectID:   manifestEntry?.projectID,
-            fileID:      manifestEntry?.fileID,
-          });
-        }
-      }
+      const results = scanInstanceFiles(entry, { includeConfig: false });
       return results.sort((a, b) => String(a.name || a.filename).localeCompare(String(b.name || b.filename)));
     } catch (e) {
       return [];
@@ -856,7 +818,7 @@ ipcMain.handle('modrinth:get-installed-files', async (_, packId) => {
   try {
     const files = scanInstanceFiles(entry, { includeConfig: false })
       .filter(f => ['mod', 'shader', 'resourcepack'].includes(String(f.type || '')));
-    await enrichWithModrinthMetadata(entry, files, { maxLookups: 12 });
+    await enrichWithModrinthMetadata(entry, files, { maxLookups: 48 });
     for (const f of files) {
       if (f.modrinthTitle && (!f.projectID || !f.name || f.name === cleanFilename(f.filename))) {
         f.name = f.modrinthTitle;
@@ -954,6 +916,7 @@ async function enrichWithModrinthMetadata(entry, files, options = {}) {
       f.modrinthProjectType = cachedByFile.projectType || '';
       f.modrinthSlug = cachedByFile.slug || '';
       f.modrinthTitle = cachedByFile.title || '';
+      f.modrinthIconUrl = cachedByFile.iconUrl || '';
       continue;
     }
 
@@ -970,6 +933,7 @@ async function enrichWithModrinthMetadata(entry, files, options = {}) {
       f.modrinthProjectType = cachedBySha1.projectType || '';
       f.modrinthSlug = cachedBySha1.slug || '';
       f.modrinthTitle = cachedBySha1.title || '';
+      f.modrinthIconUrl = cachedBySha1.iconUrl || '';
       continue;
     }
 
@@ -983,6 +947,7 @@ async function enrichWithModrinthMetadata(entry, files, options = {}) {
       projectType: '',
       slug: '',
       title: '',
+      iconUrl: '',
       missing: true,
       updatedAt: Date.now(),
     };
@@ -995,6 +960,7 @@ async function enrichWithModrinthMetadata(entry, files, options = {}) {
       if (cachedProject) {
         meta.slug = cachedProject.slug;
         meta.title = cachedProject.title;
+        meta.iconUrl = cachedProject.iconUrl;
         if (!meta.projectType) meta.projectType = cachedProject.projectType;
       } else {
         try {
@@ -1002,11 +968,13 @@ async function enrichWithModrinthMetadata(entry, files, options = {}) {
           const projectMeta = {
             slug: String(project?.slug || ''),
             title: String(project?.title || ''),
+            iconUrl: String(project?.icon_url || ''),
             projectType: String(project?.project_type || ''),
           };
           projectMetaCache.set(meta.projectId, projectMeta);
           meta.slug = projectMeta.slug;
           meta.title = projectMeta.title;
+          meta.iconUrl = projectMeta.iconUrl;
           if (!meta.projectType) meta.projectType = projectMeta.projectType;
         } catch {}
       }
@@ -1022,6 +990,7 @@ async function enrichWithModrinthMetadata(entry, files, options = {}) {
     f.modrinthProjectType = meta.projectType || '';
     f.modrinthSlug = meta.slug || '';
     f.modrinthTitle = meta.title || '';
+    f.modrinthIconUrl = meta.iconUrl || '';
   }
 
   if (dirty) saveModrinthHashCache(cache);
@@ -1152,19 +1121,349 @@ const MODRINTH_HEADERS = {
   'Accept': 'application/json',
 };
 
-async function modrinthFetch(url) {
+async function modrinthRequest(url, { method = 'GET', body = null } = {}) {
   const https = require('follow-redirects').https;
   return new Promise((resolve, reject) => {
-    https.get(url, { headers: MODRINTH_HEADERS, maxRedirects: 5, timeout: 15000 }, (res) => {
+    const payload = body == null ? '' : JSON.stringify(body);
+    const headers = { ...MODRINTH_HEADERS };
+    if (payload) {
+      headers['Content-Type'] = 'application/json';
+      headers['Content-Length'] = Buffer.byteLength(payload);
+    }
+    const req = https.request(url, {
+      method,
+      headers,
+      maxRedirects: 5,
+      timeout: 20000,
+    }, (res) => {
       let data = '';
       res.on('data', d => { data += d; });
       res.on('end', () => {
-        try { resolve(JSON.parse(data)); }
-        catch (e) { reject(new Error('Invalid JSON from Modrinth')); }
+        let parsed = null;
+        if (data) {
+          try { parsed = JSON.parse(data); }
+          catch {
+            reject(new Error('Invalid JSON from Modrinth'));
+            return;
+          }
+        }
+        const ok = res.statusCode >= 200 && res.statusCode < 300;
+        if (ok) {
+          resolve(parsed == null ? {} : parsed);
+          return;
+        }
+        const errMsg = String(
+          parsed?.error || parsed?.description || parsed?.message || `HTTP ${res.statusCode}`
+        );
+        reject(new Error(`Modrinth API ${res.statusCode}: ${errMsg}`));
       });
-    }).on('error', reject);
+    });
+    req.on('timeout', () => req.destroy(new Error('Modrinth request timeout')));
+    req.on('error', reject);
+    if (payload) req.write(payload);
+    req.end();
   });
 }
+
+async function modrinthFetch(url) {
+  return modrinthRequest(url, { method: 'GET' });
+}
+
+async function modrinthPost(url, body) {
+  return modrinthRequest(url, { method: 'POST', body });
+}
+
+function normalizeModrinthLoaderName(loader) {
+  return String(loader || '').trim().toLowerCase();
+}
+
+function getCompatibleModrinthLoaders(instanceLoader) {
+  const key = normalizeModrinthLoaderName(instanceLoader);
+  const map = {
+    fabric: ['fabric', 'quilt'],
+    quilt: ['fabric', 'quilt'],
+    forge: ['forge', 'neoforge'],
+    neoforge: ['forge', 'neoforge'],
+    vanilla: [],
+  };
+  return map[key] || (key ? [key] : []);
+}
+
+function findLibraryEntryForDestDir(resolvedDestDir) {
+  try {
+    for (const entry of library.list()) {
+      const gameDir = path.resolve(String(entry?.gameDir || ''));
+      if (!gameDir) continue;
+      if (resolvedDestDir === gameDir || containsPath(gameDir, resolvedDestDir)) return entry;
+    }
+  } catch {}
+  return null;
+}
+
+function buildModrinthInstallContext(resolvedDestDir) {
+  const entry = findLibraryEntryForDestDir(resolvedDestDir);
+  const targetFolder = path.basename(resolvedDestDir).toLowerCase();
+  return {
+    entry,
+    targetFolder,
+    mcVersion: String(entry?.mcVersion || '').trim(),
+    compatibleLoaders: getCompatibleModrinthLoaders(entry?.modloader),
+    enforceLoader: targetFolder === 'mods',
+  };
+}
+
+function pickPreferredModrinthVersion(versions, context) {
+  const list = Array.isArray(versions) ? versions : [];
+  if (!list.length) return null;
+
+  let filtered = list;
+  const targetMc = String(context?.mcVersion || '').trim();
+  if (targetMc) {
+    const exactMc = filtered.filter(v => {
+      const gameVersions = Array.isArray(v?.game_versions) ? v.game_versions : [];
+      return !gameVersions.length || gameVersions.includes(targetMc);
+    });
+    if (exactMc.length) filtered = exactMc;
+  }
+
+  if (context?.enforceLoader && Array.isArray(context.compatibleLoaders) && context.compatibleLoaders.length) {
+    const byLoader = filtered.filter(v => {
+      const loaders = (Array.isArray(v?.loaders) ? v.loaders : []).map(normalizeModrinthLoaderName).filter(Boolean);
+      if (!loaders.length) return true;
+      if (loaders.includes('minecraft')) return true;
+      return loaders.some(l => context.compatibleLoaders.includes(l));
+    });
+    if (byLoader.length) filtered = byLoader;
+  }
+
+  const scored = filtered.map(v => {
+    let score = 0;
+    const type = String(v?.version_type || '').toLowerCase();
+    if (type === 'release') score += 100;
+    else if (type === 'beta') score += 60;
+    else if (type === 'alpha') score += 20;
+    if (v?.featured) score += 12;
+    const dt = Date.parse(v?.date_published || v?.date_modified || 0);
+    if (Number.isFinite(dt)) score += dt / 1e13;
+    return { v, score };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0]?.v || null;
+}
+
+function pickModrinthVersionFile(versionObj, preferredFilename = '') {
+  const files = Array.isArray(versionObj?.files) ? versionObj.files : [];
+  if (!files.length) return null;
+  const preferred = String(preferredFilename || '').trim().toLowerCase();
+  if (preferred) {
+    const exact = files.find(f => String(f?.filename || '').trim().toLowerCase() === preferred);
+    if (exact) return exact;
+  }
+  return files.find(f => f?.primary) || files[0];
+}
+
+function verifyModrinthFileIntegrity(file, destPath) {
+  if (file?.hashes?.sha512) {
+    const expected = String(file.hashes.sha512).toLowerCase();
+    const actual = hashFile(destPath, 'sha512');
+    return actual === expected;
+  }
+  if (file?.hashes?.sha1) {
+    const expected = String(file.hashes.sha1).toLowerCase();
+    const actual = hashFile(destPath, 'sha1');
+    return actual === expected;
+  }
+  return true;
+}
+
+async function fetchLatestModrinthVersionsFromHashes(hashes, { loaders = [], gameVersions = [] } = {}) {
+  const uniq = [...new Set((Array.isArray(hashes) ? hashes : [])
+    .map(h => String(h || '').toLowerCase().trim())
+    .filter(h => /^[a-f0-9]{40}$/.test(h)))];
+  if (!uniq.length) return {};
+
+  const body = {
+    algorithm: 'sha1',
+    hashes: uniq,
+    loaders: Array.isArray(loaders) ? loaders : [],
+    game_versions: Array.isArray(gameVersions) ? gameVersions : [],
+  };
+
+  try {
+    const map = await modrinthPost(`${MODRINTH_API}/version_files/update`, body);
+    if (map && typeof map === 'object' && !Array.isArray(map)) {
+      const normalized = {};
+      for (const [k, v] of Object.entries(map)) normalized[String(k || '').toLowerCase()] = v;
+      return normalized;
+    }
+  } catch {}
+
+  // Fallback: per-hash endpoint if bulk update is unavailable.
+  const out = {};
+  for (const h of uniq) {
+    try {
+      const v = await modrinthPost(`${MODRINTH_API}/version_file/${h}/update?algorithm=sha1`, {
+        loaders: body.loaders,
+        game_versions: body.game_versions,
+      });
+      if (v?.id) out[h] = v;
+    } catch {}
+  }
+  return out;
+}
+
+function pickUpdateFileForExistingMod(versionObj, currentFilename = '') {
+  return pickModrinthVersionFile(versionObj, currentFilename) || null;
+}
+
+function isFileUpdateCandidate(fileMeta, latestVersion) {
+  const latestFile = pickUpdateFileForExistingMod(latestVersion, fileMeta?.filename || '');
+  if (!latestFile) return { updatable: false, latestFile: null };
+  const currentSha1 = String(fileMeta?.sha1 || '').toLowerCase();
+  const latestSha1 = String(latestFile?.hashes?.sha1 || '').toLowerCase();
+  if (!latestSha1 || !currentSha1) return { updatable: false, latestFile };
+  if (latestSha1 === currentSha1) return { updatable: false, latestFile };
+  return { updatable: true, latestFile };
+}
+
+async function getInstanceModUpdates(packId, { maxLookups = 64 } = {}) {
+  const entry = library.get(String(packId || ''));
+  if (!entry?.gameDir) return { ok: false, error: 'Instance not found' };
+
+  const mods = scanInstanceFiles(entry, { includeConfig: false })
+    .filter(f => String(f.type || '') === 'mod');
+  if (!mods.length) return { ok: true, total: 0, indexed: 0, outdated: 0, updates: [] };
+
+  await enrichWithModrinthMetadata(entry, mods, { maxLookups });
+
+  const candidates = [];
+  for (const f of mods) {
+    if (!f.sha1 || !/^[a-f0-9]{40}$/i.test(String(f.sha1))) {
+      const absPath = path.join(entry.gameDir, f.dir || '', f.filename || '');
+      try { f.sha1 = hashFile(absPath, 'sha1'); } catch {}
+    }
+    if (f.sha1 && /^[a-f0-9]{40}$/i.test(String(f.sha1))) candidates.push(f);
+  }
+  if (!candidates.length) return { ok: true, total: mods.length, indexed: 0, outdated: 0, updates: [] };
+
+  const loaders = getCompatibleModrinthLoaders(entry.modloader);
+  const gameVersions = entry.mcVersion ? [String(entry.mcVersion)] : [];
+  const latestByHash = await fetchLatestModrinthVersionsFromHashes(
+    candidates.map(f => String(f.sha1).toLowerCase()),
+    { loaders, gameVersions }
+  );
+
+  const updates = [];
+  for (const f of candidates) {
+    const latestVersion = latestByHash[String(f.sha1 || '').toLowerCase()];
+    if (!latestVersion?.id) continue;
+    const { updatable, latestFile } = isFileUpdateCandidate(f, latestVersion);
+    if (!updatable || !latestFile) continue;
+    updates.push({
+      filename: f.filename,
+      dir: f.dir,
+      displayName: f.modrinthTitle || f.prettyName || f.name || cleanFilename(f.filename),
+      currentSha1: String(f.sha1 || '').toLowerCase(),
+      currentVersionId: String(f.modrinthVersionId || ''),
+      projectId: String(f.modrinthProjectId || latestVersion.project_id || ''),
+      projectTitle: String(f.modrinthTitle || ''),
+      latestVersionId: String(latestVersion.id || ''),
+      latestVersionNumber: String(latestVersion.version_number || ''),
+      latestVersionName: String(latestVersion.name || ''),
+      latestFileName: String(latestFile.filename || ''),
+      latestFileUrl: String(latestFile.url || ''),
+      latestFileSha1: String(latestFile?.hashes?.sha1 || '').toLowerCase(),
+      latestFileSha512: String(latestFile?.hashes?.sha512 || '').toLowerCase(),
+    });
+  }
+
+  updates.sort((a, b) => String(a.displayName).localeCompare(String(b.displayName), undefined, { sensitivity: 'base', numeric: true }));
+  return {
+    ok: true,
+    total: mods.length,
+    indexed: candidates.length,
+    outdated: updates.length,
+    updates,
+  };
+}
+
+ipcMain.handle('modrinth:instance-check-updates', async (_, packId) => {
+  try {
+    return await getInstanceModUpdates(packId, { maxLookups: 64 });
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('modrinth:instance-apply-updates', async (_, { packId, updates }) => {
+  try {
+    const entry = library.get(String(packId || ''));
+    if (!entry?.gameDir) return { ok: false, error: 'Instance not found' };
+
+    const requested = Array.isArray(updates) ? updates : [];
+    if (!requested.length) return { ok: true, updated: 0, failed: [] };
+
+    const { downloadFile } = require('./core/utils/download');
+    const modsDir = path.join(entry.gameDir, 'mods');
+    fs.mkdirSync(modsDir, { recursive: true });
+
+    const failed = [];
+    let updated = 0;
+
+    for (const item of requested) {
+      try {
+        const oldFilename = String(item?.filename || '').trim();
+        const newFileNameRaw = String(item?.latestFileName || '').trim();
+        const fileUrl = String(item?.latestFileUrl || '').trim();
+        if (!oldFilename || !newFileNameRaw || !fileUrl) throw new Error('Invalid update payload');
+
+        if (path.basename(oldFilename) !== oldFilename || oldFilename.includes('..')) {
+          throw new Error('Invalid original filename');
+        }
+
+        const newFilename = sanitizeFilename(newFileNameRaw, oldFilename);
+        const oldPath = path.resolve(path.join(modsDir, oldFilename));
+        const newPath = path.resolve(path.join(modsDir, newFilename));
+        const tmpPath = path.resolve(path.join(modsDir, `${newFilename}.update.tmp`));
+
+        if (!containsPath(modsDir, oldPath) || !containsPath(modsDir, newPath) || !containsPath(modsDir, tmpPath)) {
+          throw new Error('Destination not allowed');
+        }
+        if (!fs.existsSync(oldPath)) throw new Error('Original file not found');
+
+        await downloadFile(fileUrl, tmpPath, () => {});
+        const verifyFile = { hashes: {} };
+        if (item.latestFileSha512) verifyFile.hashes.sha512 = item.latestFileSha512;
+        if (item.latestFileSha1) verifyFile.hashes.sha1 = item.latestFileSha1;
+        if (!verifyModrinthFileIntegrity(verifyFile, tmpPath)) {
+          throw new Error(item.latestFileSha512 ? 'SHA-512 verification failed' : 'SHA-1 verification failed');
+        }
+
+        if (oldPath !== newPath && fs.existsSync(newPath)) {
+          try { fs.unlinkSync(newPath); } catch {}
+        }
+        if (fs.existsSync(newPath)) fs.unlinkSync(newPath);
+        fs.renameSync(tmpPath, newPath);
+        if (oldPath !== newPath && fs.existsSync(oldPath)) {
+          try { fs.unlinkSync(oldPath); } catch {}
+        }
+        updated += 1;
+      } catch (e) {
+        const newFileNameRaw = String(item?.latestFileName || '').trim();
+        const tmpPath = path.resolve(path.join(entry.gameDir, 'mods', `${sanitizeFilename(newFileNameRaw, 'mod-update.jar')}.update.tmp`));
+        try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch {}
+        failed.push({
+          filename: String(item?.filename || ''),
+          error: e.message,
+        });
+      }
+    }
+
+    return { ok: true, updated, failed };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
 
 ipcMain.handle('modrinth:search', async (_, { query='', type='modpack', offset=0, limit=20, gameVersion='', loader='', sort='relevance', categories=[] }) => {
   try {
@@ -1199,11 +1498,8 @@ ipcMain.handle('modrinth:get-game-versions', async () => {
   } catch(e) { return { error: e.message }; }
 });
 
-ipcMain.handle('modrinth:download', async (_, { versionId, fileName, destDir }) => {
+ipcMain.handle('modrinth:download', async (_, { projectId, versionId, fileName, destDir, withDependencies = true }) => {
   try {
-    const versions = await modrinthFetch(`${MODRINTH_API}/version/${versionId}`);
-    const file = versions.files?.find(f => f.primary) || versions.files?.[0];
-    if (!file) throw new Error('Aucun fichier trouvé pour cette version');
     const { downloadFile } = require('./core/utils/download');
     const path = require('path');
     const fs   = require('fs');
@@ -1215,26 +1511,92 @@ ipcMain.handle('modrinth:download', async (_, { versionId, fileName, destDir }) 
     if (!allowedDest) throw new Error('Destination non autorisée');
 
     fs.mkdirSync(resolvedDestDir, { recursive: true });
-    const safeFilename = sanitizeFilename(file.filename || fileName || 'modrinth-file.jar', 'modrinth-file.jar');
-    const dest = path.join(resolvedDestDir, safeFilename);
-    await downloadFile(file.url, dest, () => {});
+    const installContext = buildModrinthInstallContext(resolvedDestDir);
+    const targetFolder = String(installContext.targetFolder || '').toLowerCase();
+    const isInstanceContentFolder = ['mods', 'shaderpacks', 'resourcepacks', 'datapacks'].includes(targetFolder);
+    if (installContext.entry?.contentLocked && isInstanceContentFolder) {
+      throw new Error('INSTANCE_CONTENT_LOCKED');
+    }
+    const autoDepsEnabled = Boolean(withDependencies) && installContext.enforceLoader && installContext.entry;
+    const visitedVersionIds = new Set();
+    const visitedProjectIds = new Set();
+    const depStats = { downloaded: 0, skipped: 0, failed: 0 };
 
-    if (file.hashes?.sha512) {
-      const expected = String(file.hashes.sha512).toLowerCase();
-      const actual   = hashFile(dest, 'sha512');
-      if (actual !== expected) {
+    async function downloadVersionFile(versionObj, preferredFilename, isDependency) {
+      const file = pickModrinthVersionFile(versionObj, preferredFilename);
+      if (!file) throw new Error('Aucun fichier trouvé pour cette version');
+
+      const safeFilename = sanitizeFilename(file.filename || preferredFilename || 'modrinth-file.jar', 'modrinth-file.jar');
+      const dest = path.join(resolvedDestDir, safeFilename);
+
+      if (fs.existsSync(dest)) {
+        if (verifyModrinthFileIntegrity(file, dest)) {
+          if (isDependency) depStats.skipped += 1;
+          return { path: dest, filename: safeFilename, skipped: true };
+        }
         try { fs.unlinkSync(dest); } catch {}
-        throw new Error('Echec verification SHA-512');
       }
-    } else if (file.hashes?.sha1) {
-      const expected = String(file.hashes.sha1).toLowerCase();
-      const actual   = hashFile(dest, 'sha1');
-      if (actual !== expected) {
+
+      await downloadFile(file.url, dest, () => {});
+      if (!verifyModrinthFileIntegrity(file, dest)) {
         try { fs.unlinkSync(dest); } catch {}
-        throw new Error('Echec verification SHA-1');
+        throw new Error(file?.hashes?.sha512 ? 'Echec verification SHA-512' : 'Echec verification SHA-1');
+      }
+      if (isDependency) depStats.downloaded += 1;
+      return { path: dest, filename: safeFilename, skipped: false };
+    }
+
+    async function resolveDependencyVersion(dep) {
+      const depVersionId = String(dep?.version_id || '').trim();
+      const depProjectId = String(dep?.project_id || '').trim();
+
+      if (depVersionId) return await modrinthFetch(`${MODRINTH_API}/version/${depVersionId}`);
+      if (!depProjectId) return null;
+
+      const versions = await modrinthFetch(`${MODRINTH_API}/project/${depProjectId}/version`);
+      return pickPreferredModrinthVersion(versions, installContext);
+    }
+
+    async function installRequiredDependencies(versionObj) {
+      if (!autoDepsEnabled) return;
+      const deps = Array.isArray(versionObj?.dependencies) ? versionObj.dependencies : [];
+      const requiredDeps = deps.filter(d => String(d?.dependency_type || '').toLowerCase() === 'required');
+
+      for (const dep of requiredDeps) {
+        try {
+          const depProjectId = String(dep?.project_id || '').trim();
+          if (depProjectId && visitedProjectIds.has(depProjectId)) continue;
+
+          const depVersion = await resolveDependencyVersion(dep);
+          if (!depVersion?.id) continue;
+
+          const depVersionId = String(depVersion.id);
+          if (visitedVersionIds.has(depVersionId)) continue;
+          visitedVersionIds.add(depVersionId);
+
+          if (depProjectId) visitedProjectIds.add(depProjectId);
+          await downloadVersionFile(depVersion, dep?.file_name || '', true);
+          await installRequiredDependencies(depVersion);
+        } catch {
+          depStats.failed += 1;
+        }
       }
     }
-    return { ok: true, path: dest, filename: safeFilename };
+
+    const rootVersion = await modrinthFetch(`${MODRINTH_API}/version/${versionId}`);
+    const rootVersionId = String(rootVersion?.id || '').trim();
+    if (rootVersionId) visitedVersionIds.add(rootVersionId);
+    if (projectId) visitedProjectIds.add(String(projectId).trim());
+
+    await installRequiredDependencies(rootVersion);
+    const mainFile = await downloadVersionFile(rootVersion, fileName || '', false);
+
+    return {
+      ok: true,
+      path: mainFile.path,
+      filename: mainFile.filename,
+      dependencies: autoDepsEnabled ? depStats : { downloaded: 0, skipped: 0, failed: 0 },
+    };
   } catch(e) { return { ok: false, error: e.message }; }
 });
 
@@ -1268,6 +1630,54 @@ ipcMain.handle('library:update', (_, id, fields) => {
   const updated = library.update(id, fields);
   if (updated) discordPresence?.syncRunningPack(updated);
   return updated;
+});
+
+ipcMain.handle('modpack:delete-content-file', (_, payload) => {
+  try {
+    const packId = String(payload?.packId || '');
+    const dir = String(payload?.dir || '');
+    const filename = String(payload?.filename || '');
+    if (!packId || !dir || !filename) return { ok: false, error: 'Invalid parameters' };
+
+    const entry = library.get(packId);
+    if (!entry?.gameDir) return { ok: false, error: 'Instance not found' };
+
+    const allowedDirs = new Set(['mods', 'shaderpacks', 'resourcepacks']);
+    if (!allowedDirs.has(dir)) return { ok: false, error: 'Unsupported content type' };
+
+    if (path.basename(filename) !== filename || filename.includes('..')) {
+      return { ok: false, error: 'Invalid filename' };
+    }
+
+    const targetDir = path.resolve(path.join(entry.gameDir, dir));
+    const targetPath = path.resolve(path.join(targetDir, filename));
+    if (targetPath === targetDir || !containsPath(targetDir, targetPath)) {
+      return { ok: false, error: 'Destination not allowed' };
+    }
+    if (!fs.existsSync(targetPath)) return { ok: false, error: 'File not found' };
+
+    const stat = fs.statSync(targetPath);
+    if (!stat.isFile()) return { ok: false, error: 'Invalid file type' };
+
+    fs.unlinkSync(targetPath);
+
+    if (dir === 'mods') {
+      const manifestPath = path.join(entry.gameDir, 'mods-manifest.json');
+      try {
+        if (fs.existsSync(manifestPath)) {
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) || {};
+          if (manifest && typeof manifest === 'object' && manifest[filename]) {
+            delete manifest[filename];
+            fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+          }
+        }
+      } catch {}
+    }
+
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 });
 
 // ── Per-instance logs ─────────────────────────────────────────────────────────
@@ -1355,6 +1765,7 @@ ipcMain.handle('modpack:import', async (_, filePath) => {
   const payload = (filePath && typeof filePath === 'object') ? filePath : { filePath };
   const sourcePath = String(payload.filePath || '');
   const cleanupSource = !!payload.cleanupSource;
+  const lockOfficial = !!payload.lockOfficial;
   try {
     // 1. Parse
     const parsed = await ModpackParser.parse(sourcePath, msg => send('install:log', msg));
@@ -1426,7 +1837,10 @@ ipcMain.handle('modpack:import', async (_, filePath) => {
     send('install:progress', { step: 'overrides', pct: 100, detail: 'Overrides appliqués' });
 
     // 7. Save to library
-    const entry = library.add(parsed, failed, versionId);
+    const entry = library.add(parsed, failed, versionId, {
+      contentLocked: lockOfficial,
+      lockSource: lockOfficial ? 'browser-official' : '',
+    });
     send('install:progress', { step: 'done', pct: 100, detail: 'Installation terminée !' });
     send('install:done', entry);
     send('install:log', `✅ ${parsed.name} est prêt !`);
@@ -1496,8 +1910,13 @@ ipcMain.handle('game:launch', async (_, modpackId) => {
 
     const defaultWidth = Math.max(320, Math.min(8192, Math.round(+defaults.width || 1280)));
     const defaultHeight = Math.max(240, Math.min(8192, Math.round(+defaults.height || 720)));
-    const width = Number.isFinite(+entry.windowWidth) ? Math.max(320, Math.min(8192, Math.round(+entry.windowWidth))) : defaultWidth;
-    const height = Number.isFinite(+entry.windowHeight) ? Math.max(240, Math.min(8192, Math.round(+entry.windowHeight))) : defaultHeight;
+    const useGlobalResolution = entry.useGlobalResolution !== false;
+    const width = useGlobalResolution
+      ? defaultWidth
+      : (Number.isFinite(+entry.windowWidth) ? Math.max(320, Math.min(8192, Math.round(+entry.windowWidth))) : defaultWidth);
+    const height = useGlobalResolution
+      ? defaultHeight
+      : (Number.isFinite(+entry.windowHeight) ? Math.max(240, Math.min(8192, Math.round(+entry.windowHeight))) : defaultHeight);
     const fullscreen = (typeof entry.fullscreen === 'boolean') ? entry.fullscreen : !!defaults.fullscreen;
     const javaArgsSource = (typeof entry.javaArgs === 'string' && entry.javaArgs.trim()) ? entry.javaArgs : (defaults.javaArgs || '');
     const envVarsSource = (typeof entry.envVars === 'string' && entry.envVars.trim()) ? entry.envVars : (defaults.envVars || '');
@@ -1707,6 +2126,7 @@ ipcMain.handle('instance:create', async (_, { name, mcVersion, loader, loaderVer
     const seeded = library.update(entry.id, {
       ram: Number.isFinite(+d.ram) ? Math.max(1, Math.min(32, Math.round(+d.ram))) : entry.ram,
       fullscreen: !!d.fullscreen,
+      useGlobalResolution: true,
       windowWidth: null,
       windowHeight: null,
       javaArgs: typeof d.javaArgs === 'string' ? d.javaArgs : '',
