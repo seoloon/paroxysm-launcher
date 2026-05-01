@@ -174,10 +174,12 @@ class GameLauncher {
     console.log('[launch] nativesDir:', nativesDir, `(${fs.readdirSync(nativesDir).length} files)`);
     console.log('[launch] ramMB:     ', ramMB);
 
-    const child = spawn(javaPath, fullArgs, {
+    const launchJavaPath = resolveJavaLaunchPath(javaPath);
+    const child = spawn(launchJavaPath, fullArgs, {
       cwd:      entry.gameDir,
       detached: true,
       stdio:    ['ignore', 'pipe', 'pipe'],
+      windowsHide: process.platform === 'win32',
       env: {
         ...process.env,
         ...(extraEnv && typeof extraEnv === 'object' ? extraEnv : {}),
@@ -452,6 +454,17 @@ function substituteVars(str, vars) {
 function osName() {
   return process.platform === 'win32' ? 'windows'
        : process.platform === 'darwin' ? 'osx' : 'linux';
+}
+
+function resolveJavaLaunchPath(javaPath) {
+  if (process.platform !== 'win32') return javaPath;
+  const raw = String(javaPath || '');
+  if (!raw.toLowerCase().endsWith('java.exe')) return javaPath;
+  const javawPath = path.join(path.dirname(javaPath), 'javaw.exe');
+  try {
+    if (fs.existsSync(javawPath)) return javawPath;
+  } catch {}
+  return javaPath;
 }
 
 function generateOfflineUUID(name) {
