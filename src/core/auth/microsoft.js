@@ -199,7 +199,7 @@ class MicrosoftAuth {
   async startLogin() {
     const state = crypto.randomBytes(16).toString('hex');
 
-    return await Promise.race([
+    return Promise.race([
       this._waitForCallback(state),
       new Promise((_, reject) =>
         setTimeout(() => reject(new Error('Timeout : connexion non complétée en 5 minutes')), 5 * 60 * 1000)
