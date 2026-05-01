@@ -4,13 +4,23 @@ if(!window.px){document.body.innerHTML='<div style="color:#F43F5E;padding:40px;f
 const px=window.px;
 // i18n shortcut — window.i18n is loaded by i18n.js before this script
 const t=(key,vars)=>window.i18n?window.i18n.t(key,vars):key;
-let allPacks=[],currentPack=null,isInstalling=false,isGameRunning=false,gameLogCb=null,gameCloseCb=null;
+let allPacks=[],allPacksById=new Map(),currentPack=null,isInstalling=false,isGameRunning=false,gameLogCb=null,gameCloseCb=null;
+let libraryLoadPromise=null;
 let runningGamePackId=null,runningGamePid=null;
+let cardGameCloseCb=null;
 let mrVersionsLoaded=false;
 
 function $(id){return document.getElementById(id);}
 function esc(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function fmt(n){if(!n)return'0';if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(1)+'k';return String(n);}
+const MB_PER_GB = 1024;
+const NAME_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+function gbToMB(gb){
+  return Math.max(0, Math.round((Number(gb) || 0) * MB_PER_GB));
+}
+function formatRamMB(gb){
+  return `${gbToMB(gb)} MB`;
+}
 function getLoaderDisplayName(loader){
   const raw = String(loader || '');
   const lower = raw.toLowerCase();
@@ -39,7 +49,6 @@ function prettifyContentName(rawName, rawFilename, type=''){
   s = s
     .replace(/[+]/g,' ')
     .replace(/\b(mc|minecraft)\s*[0-9]+(?:\.[0-9]+){0,3}\b/ig,' ')
-    .replace(/\b(forge|neoforge|fabric|quilt)\b/ig,' ')
     .replace(/\bv?[0-9]+(?:\.[0-9]+){1,3}(?:[-._]?(alpha|beta|rc)[-._]?\d*)?\b/ig,' ')
     .replace(/([a-z])([A-Z])/g,'$1 $2')
     .replace(/([a-zA-Z])(\d)/g,'$1 $2')
@@ -64,6 +73,23 @@ function preprocessInstanceFiles(files){
     const prettyName = prettifyContentName(f?.modrinthTitle || f?.name, f?.filename, f?.type);
     return { ...f, prettyName };
   });
+}
+
+async function loadPackContentFiles(packId){
+  if (!packId) return [];
+  try {
+    const strict = await px.modrinth.getInstalledFiles(packId);
+    if (Array.isArray(strict?.files)) return preprocessInstanceFiles(strict.files);
+  } catch {}
+  try {
+    const files = await px.config.get('__instanceFiles__:' + packId);
+    return preprocessInstanceFiles(files || []);
+  } catch {
+    return [];
+  }
+}
+function getPackById(id){
+  return allPacksById.get(String(id||'')) || null;
 }
 function normalizeUuid(raw){
   const v=String(raw||'').replace(/-/g,'').toLowerCase();
@@ -292,7 +318,19 @@ document.querySelectorAll('.nav-btn, .account-mini').forEach(btn=>{
 });
 
 // ── Library ──────────────────────────────────────────────────────────────────
-async function loadLibrary(){allPacks=await px.library.list();applyLibraryFilter();}
+async function loadLibrary(){
+  if (libraryLoadPromise) return libraryLoadPromise;
+  libraryLoadPromise = (async () => {
+    allPacks=await px.library.list();
+    allPacksById = new Map(allPacks.map(p=>[String(p.id||''), p]));
+    applyLibraryFilter();
+  })();
+  try {
+    await libraryLoadPromise;
+  } finally {
+    libraryLoadPromise = null;
+  }
+}
 function applyLibraryFilter(){
   const q=($('inp-search')?.value||'').toLowerCase().trim();
   renderLibrary(q?allPacks.filter(p=>p.name.toLowerCase().includes(q)||p.mcVersion.includes(q)||p.modloader.includes(q)):allPacks);
@@ -316,6 +354,12 @@ function renderLibrary(packs){
   <span class="card-foreground-fallback" style="display:none">${initials}</span>
 </div>`
       : `<div class="card-foreground-icon"><span class="card-foreground-fallback">${initials}</span></div>`;
+    const isRunningCard = runningGamePackId === p.id;
+    const playAction = isRunningCard ? 'kill' : 'play';
+    const playTitle = isRunningCard ? t('pack.kill') : t('pack.play');
+    const playIcon = isRunningCard
+      ? '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>'
+      : '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
     return `<div class="modpack-card" data-id="${esc(p.id)}">
 <div class="card-banner">${bannerContent}
 ${foregroundIcon}
@@ -329,9 +373,10 @@ ${foregroundIcon}
 <div class="card-meta-item"><svg viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5"/><path d="M7 4v3l2 1.5"/></svg>${last}</div>
 ${p.failedMods>0?`<div class="card-meta-item" style="color:var(--orange)">⚠ ${p.failedMods}</div>`:''}
 </div></div>
-<div class="card-overlay"><button class="card-play-circle" data-play="${esc(p.id)}"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button></div>
+<div class="card-overlay"><button class="card-play-circle ${isRunningCard?'card-stop-circle':''}" data-play="${esc(p.id)}" data-action="${playAction}" title="${esc(playTitle)}" aria-label="${esc(playTitle)}">${playIcon}</button></div>
 </div>`;
   }).join('');
+
   grid.querySelectorAll('.lib-banner-img').forEach(img=>{
     img.addEventListener('error',()=>{img.style.display='none';},{once:true});
   });
@@ -342,9 +387,6 @@ ${p.failedMods>0?`<div class="card-meta-item" style="color:var(--orange)">⚠ ${
       if(fb)fb.style.display='flex';
     },{once:true});
   });
-  grid.querySelectorAll('[data-play]').forEach(btn=>{btn.addEventListener('click',e=>{e.stopPropagation();const pack=allPacks.find(p=>p.id===btn.dataset.play);if(pack)openPlayPanel(pack);});});
-  grid.querySelectorAll('[data-del]').forEach(btn=>{btn.addEventListener('click',e=>{e.stopPropagation();const pack=allPacks.find(p=>p.id===btn.dataset.del);if(pack)deleteModpack(pack);});});
-  grid.querySelectorAll('[data-settings]').forEach(btn=>{btn.addEventListener('click',e=>{e.stopPropagation();const pack=allPacks.find(p=>p.id===btn.dataset.settings);if(pack)openPackPage(pack);});});
 }
 async function deleteModpack(pack){
   const ok=await showConfirmDialog({
@@ -354,9 +396,47 @@ async function deleteModpack(pack){
     danger:true,
   });
   if(!ok)return;
-  await px.library.delete(pack.id);if(currentPack?.id===pack.id)closePlayPanel();await loadLibrary();
+  await px.library.delete(pack.id);await loadLibrary();
 }
 $('inp-search').addEventListener('input',()=>applyLibraryFilter());
+const libGrid = $('lib-grid');
+libGrid?.addEventListener('click', async (e) => {
+  const playBtn = e.target.closest('[data-play]');
+  if (playBtn && libGrid.contains(playBtn)) {
+    e.stopPropagation();
+    const pack = getPackById(playBtn.dataset.play);
+    if (!pack) return;
+    const action = String(playBtn.dataset.action || 'play');
+    if (action === 'kill') {
+      playBtn.disabled = true;
+      const result = await px.game.kill();
+      playBtn.disabled = false;
+      if (!result?.ok) {
+        notifyError(result?.error || t('error.unknown'));
+        return;
+      }
+      notify(t('status.kill_sent'), 'info', 1600);
+      return;
+    }
+    await launchPackFromLibraryCard(pack, playBtn);
+    return;
+  }
+
+  const deleteBtn = e.target.closest('[data-del]');
+  if (deleteBtn && libGrid.contains(deleteBtn)) {
+    e.stopPropagation();
+    const pack = getPackById(deleteBtn.dataset.del);
+    if (pack) deleteModpack(pack);
+    return;
+  }
+
+  const settingsBtn = e.target.closest('[data-settings]');
+  if (settingsBtn && libGrid.contains(settingsBtn)) {
+    e.stopPropagation();
+    const pack = getPackById(settingsBtn.dataset.settings);
+    if (pack) openPackPage(pack);
+  }
+});
 setInterval(()=>{
   if($('page-library')?.classList.contains('active') && !isInstalling){
     loadLibrary().catch(()=>{});
@@ -374,18 +454,71 @@ $('btn-import').addEventListener('click',doImport);$('btn-import-empty').addEven
 
 // ── Modal ─────────────────────────────────────────────────────────────────────
 const STEPS=['java','modloader','mods','overrides'];
-function openInstallModal(filePath){
-  $('modal-title').textContent=t('install.modal_title_file',{file:filePath.split(/[\\/]/).pop()});
-  $('modal-overlay').style.display='flex';$('modal-close-btn').style.display='none';$('modal-log').innerHTML='';
-  STEPS.forEach(s=>{$('istep-'+s)?.setAttribute('class','istep');const d=$('istep-'+s+'-detail');if(d)d.textContent=t('install.preparing');const p=$('istep-'+s+'-pct');if(p)p.textContent='';});
+const installSession={
+  active:false,
+  error:false,
+  errorMsg:'',
+  lastDetail:'',
+  lastPct:0,
+};
+function getInstallModalVisible(){return $('modal-overlay').style.display==='flex';}
+function updateInstallMini(){
+  const mini=$('install-mini');
+  if(!mini)return;
+  const visible=installSession.active && !getInstallModalVisible();
+  mini.style.display=visible?'flex':'none';
+  if(!visible)return;
+  const titleEl=$('install-mini-title');
+  const detailEl=$('install-mini-detail');
+  const pctEl=$('install-mini-pct');
+  const spinnerEl=$('install-mini-spinner');
+  if(titleEl)titleEl.textContent=installSession.error?t('error.generic'):(isInstalling?t('install.title'):t('install.done'));
+  if(detailEl){
+    if(installSession.error && installSession.errorMsg)detailEl.textContent=installSession.errorMsg;
+    else detailEl.textContent=installSession.lastDetail||t('install.preparing');
+  }
+  if(pctEl)pctEl.textContent=(isInstalling&&installSession.lastPct>0)?`${installSession.lastPct}%`:'';
+  if(spinnerEl)spinnerEl.style.display=isInstalling?'inline-block':'none';
 }
-$('modal-close-btn').addEventListener('click',()=>{$('modal-overlay').style.display='none';});
+function showInstallModalUi(){
+  $('modal-overlay').style.display='flex';
+  updateInstallMini();
+}
+function minimizeInstallModalUi(){
+  $('modal-overlay').style.display='none';
+  updateInstallMini();
+}
+function dismissInstallModalUi(){
+  installSession.active=false;
+  installSession.error=false;
+  installSession.errorMsg='';
+  installSession.lastDetail='';
+  installSession.lastPct=0;
+  $('modal-overlay').style.display='none';
+  updateInstallMini();
+}
+function openInstallModal(filePath){
+  installSession.active=true;
+  installSession.error=false;
+  installSession.errorMsg='';
+  installSession.lastDetail=t('install.preparing');
+  installSession.lastPct=0;
+  $('modal-title').textContent=t('install.modal_title_file',{file:filePath.split(/[\\/]/).pop()});
+  $('modal-close-btn').style.display='none';$('modal-log').innerHTML='';
+  STEPS.forEach(s=>{$('istep-'+s)?.setAttribute('class','istep');const d=$('istep-'+s+'-detail');if(d)d.textContent=t('install.preparing');const p=$('istep-'+s+'-pct');if(p)p.textContent='';});
+  showInstallModalUi();
+}
+$('modal-close-btn').addEventListener('click',()=>dismissInstallModalUi());
+$('install-mini-open')?.addEventListener('click',()=>showInstallModalUi());
 function updateStep(step,pct,detail){
   if(step==='done'){STEPS.forEach(s=>{const e=$('istep-'+s);if(e)e.className='istep s-done';});return;}
   if(!STEPS.includes(step))return;
+  installSession.lastPct=Math.max(0,Math.min(100,Math.round(Number(pct)||0)));
+  if(detail)installSession.lastDetail=detail;
   const el=$('istep-'+step);if(el)el.className='istep s-active';
   if(detail){const d=$('istep-'+step+'-detail');if(d)d.textContent=detail;}
   if(pct>=0){const p=$('istep-'+step+'-pct');if(p)p.textContent=pct>0?pct+'%':'';}
+  updateInstallMini();
 }
 function appendLog(msg){
   if(!msg?.trim())return;const el=$('modal-log');const line=document.createElement('div');
@@ -395,7 +528,16 @@ function appendLog(msg){
   else if(msg.startsWith('  ')||msg.includes('['))line.style.color='var(--cyan)';
   line.textContent=msg;el.appendChild(line);if(el.children.length>400)el.removeChild(el.firstChild);el.scrollTop=el.scrollHeight;
 }
-function showModalError(msg){notifyError(msg);$('modal-close-btn').style.display='block';}
+function showModalError(msg){
+  notifyError(msg);
+  installSession.active=true;
+  installSession.error=true;
+  installSession.errorMsg=String(msg||'');
+  installSession.lastDetail=String(msg||'');
+  installSession.lastPct=0;
+  $('modal-close-btn').style.display='block';
+  updateInstallMini();
+}
 
 // ── Play panel ────────────────────────────────────────────────────────────────
 let ppCurrentFilter='all', ppAllFiles=[];
@@ -593,8 +735,7 @@ async function ppLoadFiles(pack){
   ).join('');
 
   try {
-    const files=await px.config.get('__instanceFiles__:'+pack.id);
-    if(Array.isArray(files)){ppAllFiles=preprocessInstanceFiles(files);}
+    ppAllFiles = await loadPackContentFiles(pack.id);
   } catch(e){ppAllFiles=[];}
 
   // Détecter les noms numériques (projectID-fileID.jar non résolus)
@@ -786,14 +927,20 @@ $('btn-kill').addEventListener('click',async function(){
 
 let packPagePack = null;
 let packPageFilter = 'all';
+let packPageSort = 'alpha-asc';
 let packPageFiles = [];
+let packPagePendingUpdates = [];
+let packPagePendingUpdateByFile = new Map();
+let packPageUpdatesChecking = false;
+let packPageUpdatesApplying = false;
 let packLogPath = null;
 let packIsRunning = false;
 let packGameLogCb = null;
 let packGameCloseCb = null;
+let packSettingsTab = 'general';
 
-const TYPE_COLORS_PP = {mod:'#8B5CF6',shader:'#F59E0B',resourcepack:'#3B82F6',config:'#64748B',other:'#334155'};
-const TYPE_LABELS_PP = {mod:'MOD',shader:'SHD',resourcepack:'RES',config:'CFG',other:'?'};
+const TYPE_COLORS_PP = {mod:'#8B5CF6',shader:'#F59E0B',resourcepack:'#3B82F6',other:'#334155'};
+const TYPE_LABELS_PP = {mod:'MOD',shader:'SHD',resourcepack:'RES',other:'?'};
 
 function getGlobalResolutionDefaults() {
   const wRaw = parseInt(($('def-width')?.value ?? ''), 10);
@@ -811,10 +958,67 @@ function syncPackResolutionFields() {
   heightInput.disabled = useGlobal;
 }
 
+function switchPackSettingsTab(tab) {
+  packSettingsTab = String(tab || 'general');
+  document.querySelectorAll('[data-pack-settings-tab]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.packSettingsTab === packSettingsTab);
+  });
+  document.querySelectorAll('.pp-settings-pane').forEach(pane => {
+    pane.classList.toggle('active', pane.id === `pack-settings-pane-${packSettingsTab}`);
+  });
+}
+
+function refreshPackContentLockUi() {
+  const statusEl = $('pack-content-lock-status');
+  const hintEl = $('pack-content-lock-hint');
+  const unlockBtn = $('pack-unlock-instance-btn');
+  if (!statusEl || !hintEl || !unlockBtn || !packPagePack) return;
+
+  const locked = !!packPagePack.contentLocked;
+  statusEl.classList.toggle('locked', locked);
+  statusEl.classList.toggle('unlocked', !locked);
+  statusEl.textContent = locked ? t('pack.settings.content_guard_locked') : t('pack.settings.content_guard_unlocked');
+  hintEl.textContent = locked ? t('pack.settings.content_guard_locked_hint') : t('pack.settings.content_guard_unlocked_hint');
+  unlockBtn.disabled = !locked;
+}
+
+async function showLockedContentWarning(packName) {
+  const goSettings = await showConfirmDialog({
+    title: t('dialog.confirm_title'),
+    message: t('pack.content.locked_error', { name: packName || '' }),
+    confirmText: t('pack.content.locked_open_settings'),
+    cancelText: t('dialog.cancel'),
+  });
+  if (!goSettings) return;
+  document.querySelectorAll('.pp-nav-btn').forEach(b => b.classList.toggle('active', b.dataset.pptab === 'settings'));
+  document.querySelectorAll('.pp-tab-pane').forEach(p => p.classList.toggle('active', p.id === 'pptab-settings'));
+  switchPackSettingsTab('content');
+}
+
+function mapModrinthDownloadError(message, instanceName = '') {
+  const raw = String(message || '').trim();
+  if (raw === 'INSTANCE_CONTENT_LOCKED') {
+    return t('pack.content.locked_error', { name: instanceName || '' });
+  }
+  return raw || t('error.unknown');
+}
+
 async function openPackPage(pack) {
   packPagePack = pack;
   packIsRunning = !!runningGamePackId;
   packPageFilter = 'all';
+  packPagePendingUpdates = [];
+  packPagePendingUpdateByFile = new Map();
+  packPageUpdatesChecking = false;
+  packPageUpdatesApplying = false;
+  const sortSelect = $('pack-content-sort');
+  if (sortSelect) sortSelect.value = packPageSort;
+  const updStatus = $('pack-content-updates-status');
+  if (updStatus) updStatus.textContent = '';
+  const applyBtn = $('pack-content-apply-updates');
+  if (applyBtn) applyBtn.disabled = true;
+  syncPackUpdateButtons();
+  switchPackSettingsTab('general');
 
   // Navigate tabs to first
   document.querySelectorAll('.pp-nav-btn').forEach(b => b.classList.toggle('active', b.dataset.pptab === 'overview'));
@@ -866,12 +1070,8 @@ async function openPackPage(pack) {
     sb.textContent=t('status.minecraft_launched',{pid:runningGamePid||'?'});
   }
 
-  // Load content files
-  packPageFiles = [];
-  try {
-    const files = await px.config.get('__instanceFiles__:' + pack.id);
-    if (Array.isArray(files)) packPageFiles = preprocessInstanceFiles(files);
-  } catch {}
+  // Load content files (prefer Modrinth-enriched metadata)
+  packPageFiles = await loadPackContentFiles(pack.id);
 
   // Check numeric names
   const numericPat = /^\d+-\d+(\.jar)?$/;
@@ -887,12 +1087,10 @@ async function openPackPage(pack) {
   const globalRes = getGlobalResolutionDefaults();
   const localWidth = Number.isFinite(+pack.windowWidth) ? Math.max(320, Math.min(8192, Math.round(+pack.windowWidth))) : null;
   const localHeight = Number.isFinite(+pack.windowHeight) ? Math.max(240, Math.min(8192, Math.round(+pack.windowHeight))) : null;
-  const hasExplicitLocalResolution = Number.isFinite(localWidth) && Number.isFinite(localHeight);
-  const sameAsGlobalResolution = hasExplicitLocalResolution && localWidth === globalRes.width && localHeight === globalRes.height;
-  const hasLocalResolution = hasExplicitLocalResolution && !sameAsGlobalResolution;
-  $('pack-use-global-resolution').checked = !hasLocalResolution;
-  $('pack-width').value = hasLocalResolution ? localWidth : globalRes.width;
-  $('pack-height').value = hasLocalResolution ? localHeight : globalRes.height;
+  const useGlobalResolution = pack.useGlobalResolution !== false;
+  $('pack-use-global-resolution').checked = useGlobalResolution;
+  $('pack-width').value = !useGlobalResolution && Number.isFinite(localWidth) ? localWidth : globalRes.width;
+  $('pack-height').value = !useGlobalResolution && Number.isFinite(localHeight) ? localHeight : globalRes.height;
   syncPackResolutionFields();
   const resolutionHint = $('pack-resolution-hint');
   if (resolutionHint) resolutionHint.textContent = t('pack.settings.use_global_resolution_hint');
@@ -903,13 +1101,14 @@ async function openPackPage(pack) {
   const packRam = pack.ram || 0;
   const safePackRam = Math.max(0, Math.min(packRam, packRamMax));
   $('pack-ram').value = safePackRam;
-  $('pack-ram-val').textContent = safePackRam > 0 ? safePackRam + ' GB' : t('pack.settings.ram_global');
+  $('pack-ram-val').textContent = safePackRam > 0 ? formatRamMB(safePackRam) : t('pack.settings.ram_global');
   const packRamSystemInfo = $('pack-ram-system-info');
   if (packRamSystemInfo && _systemRamGB) {
-    packRamSystemInfo.textContent = t('pack.settings.ram_system', { n: _systemRamGB });
+    packRamSystemInfo.textContent = t('pack.settings.ram_system', { n: gbToMB(_systemRamGB) });
   }
   updatePackRamWarning(safePackRam);
   updatePackIconPreview(pack);
+  refreshPackContentLockUi();
 
   // Load log files list
   packLoadLogFiles();
@@ -933,6 +1132,10 @@ $('pack-back').addEventListener('click', () => {
 
 $('pack-add-content').addEventListener('click', async () => {
   if (!packPagePack) return;
+  if (packPagePack.contentLocked) {
+    await showLockedContentWarning(packPagePack.customName || packPagePack.name);
+    return;
+  }
   await openBrowseForInstance(packPagePack);
 });
 
@@ -944,6 +1147,10 @@ document.querySelectorAll('.pp-nav-btn').forEach(btn => {
     btn.classList.add('active');
     $('pptab-' + btn.dataset.pptab)?.classList.add('active');
   });
+});
+
+document.querySelectorAll('[data-pack-settings-tab]').forEach(btn => {
+  btn.addEventListener('click', () => switchPackSettingsTab(btn.dataset.packSettingsTab || 'general'));
 });
 
 // ── Launch from pack page ─────────────────────────────────────────────────────
@@ -1039,6 +1246,187 @@ document.querySelectorAll('[data-packfilter]').forEach(btn => {
 });
 
 $('pack-content-search').addEventListener('input', () => packRenderContent());
+$('pack-content-sort').addEventListener('change', () => {
+  packPageSort = String($('pack-content-sort').value || 'alpha-asc');
+  packRenderContent();
+});
+
+function syncPackUpdateButtons() {
+  const refreshBtn = $('pack-content-refresh-updates');
+  const applyBtn = $('pack-content-apply-updates');
+  if (refreshBtn) refreshBtn.disabled = packPageUpdatesChecking || packPageUpdatesApplying;
+  if (applyBtn) applyBtn.disabled = packPageUpdatesChecking || packPageUpdatesApplying || !packPagePendingUpdates.length;
+}
+
+function setPackUpdateStatusText(text) {
+  const statusEl = $('pack-content-updates-status');
+  if (statusEl) statusEl.textContent = String(text || '');
+}
+
+async function packCheckModUpdates() {
+  if (!packPagePack || packPageUpdatesChecking || packPageUpdatesApplying) return;
+  packPageUpdatesChecking = true;
+  syncPackUpdateButtons();
+  setPackUpdateStatusText(t('pack.content.updates.checking'));
+  try {
+    const result = await px.modrinth.checkInstanceUpdates(packPagePack.id);
+    if (!result?.ok) throw new Error(result?.error || t('error.unknown'));
+    packPagePendingUpdates = Array.isArray(result.updates) ? result.updates : [];
+    packPagePendingUpdateByFile = new Map(packPagePendingUpdates.map(u => [String(u.filename || ''), u]));
+    setPackUpdateStatusText(
+      packPagePendingUpdates.length
+        ? t('pack.content.updates.found', { n: packPagePendingUpdates.length })
+        : t('pack.content.updates.none')
+    );
+    packRenderContent();
+  } catch (e) {
+    packPagePendingUpdates = [];
+    packPagePendingUpdateByFile = new Map();
+    setPackUpdateStatusText((e && e.message) ? e.message : t('error.unknown'));
+  } finally {
+    packPageUpdatesChecking = false;
+    syncPackUpdateButtons();
+  }
+}
+
+const _contentProjectIconCache = {};
+const _contentSearchIconCache = {};
+function normalizeContentTypeForSearch(type){
+  const t = String(type || '').toLowerCase();
+  if (t === 'shader') return 'shader';
+  if (t === 'resourcepack') return 'resourcepack';
+  return 'mod';
+}
+function applyIconToContentCard(card, iconUrl){
+  if (!card || !iconUrl) return;
+  const iconEl = card.querySelector('.pp-content-icon');
+  if (!iconEl || iconEl.querySelector('img')) return;
+  const fallback = String(iconEl.dataset.fallbackLabel || iconEl.textContent || '?').trim() || '?';
+  iconEl.dataset.fallbackLabel = fallback;
+  iconEl.innerHTML = `<img src="${esc(iconUrl)}" alt="" class="mod-content-icon-img">`;
+  iconEl.style.background = 'transparent';
+  iconEl.style.padding = '0';
+  const img = iconEl.querySelector('img');
+  if (img) {
+    img.addEventListener('error', () => {
+      iconEl.textContent = fallback;
+      iconEl.style.background = '';
+      iconEl.style.padding = '';
+    }, { once:true });
+  }
+}
+async function enrichContentIcons(container){
+  const cards = [...container.querySelectorAll('[data-iconquery]')];
+  if (!cards.length) return;
+
+  const projectIds = [...new Set(cards
+    .map(c => String(c.dataset.projectid || '').trim())
+    .filter(Boolean)
+    .filter(pid => !Object.prototype.hasOwnProperty.call(_contentProjectIconCache, pid)))];
+
+  for (let i = 0; i < projectIds.length; i += 6) {
+    const chunk = projectIds.slice(i, i + 6);
+    await Promise.allSettled(chunk.map(async pid => {
+      try {
+        const p = await px.modrinth.getProject(pid);
+        _contentProjectIconCache[pid] = p?.icon_url || null;
+      } catch {
+        _contentProjectIconCache[pid] = null;
+      }
+    }));
+  }
+  cards.forEach(card => {
+    const pid = String(card.dataset.projectid || '').trim();
+    if (!pid) return;
+    const iconUrl = _contentProjectIconCache[pid];
+    if (iconUrl) applyIconToContentCard(card, iconUrl);
+  });
+
+  const searchTargets = [];
+  const seen = new Set();
+  for (const card of cards) {
+    if (card.querySelector('.pp-content-icon img')) continue;
+    const query = String(card.dataset.iconquery || '').trim();
+    const type = normalizeContentTypeForSearch(card.dataset.icontype);
+    if (!query) continue;
+    const key = `${type}|${query.toLowerCase()}`;
+    if (seen.has(key) || Object.prototype.hasOwnProperty.call(_contentSearchIconCache, key)) continue;
+    seen.add(key);
+    searchTargets.push({ key, query, type });
+  }
+
+  for (let i = 0; i < searchTargets.length; i += 8) {
+    const chunk = searchTargets.slice(i, i + 8);
+    await Promise.allSettled(chunk.map(async ({ key, query, type }) => {
+      try {
+        const cleaned = query
+          .replace(/\.(jar|zip|mrpack)$/i,'')
+          .replace(/\b(mc|minecraft)\s*[0-9]+(?:\.[0-9]+){0,3}\b/ig,' ')
+          .replace(/\bv?[0-9]+(?:\.[0-9]+){1,3}(?:[-._]?(alpha|beta|rc)[-._]?\d*)?\b/ig,' ')
+          .replace(/[_-]+/g,' ')
+          .replace(/\s+/g,' ')
+          .trim();
+        if (!cleaned || cleaned.length < 2) { _contentSearchIconCache[key] = null; return; }
+        const result = await px.modrinth.search({ query: cleaned, type, limit: 3, sort: 'relevance' });
+        const hits = result?.hits || [];
+        const lc = cleaned.toLowerCase();
+        const best = hits.find(h =>
+          String(h?.slug || '').toLowerCase() === lc ||
+          String(h?.title || '').toLowerCase() === lc ||
+          String(h?.title || '').toLowerCase().startsWith(lc)
+        ) || hits[0] || null;
+        _contentSearchIconCache[key] = best?.icon_url || null;
+      } catch {
+        _contentSearchIconCache[key] = null;
+      }
+    }));
+  }
+
+  cards.forEach(card => {
+    if (card.querySelector('.pp-content-icon img')) return;
+    const query = String(card.dataset.iconquery || '').trim();
+    const type = normalizeContentTypeForSearch(card.dataset.icontype);
+    if (!query) return;
+    const key = `${type}|${query.toLowerCase()}`;
+    const iconUrl = _contentSearchIconCache[key];
+    if (iconUrl) applyIconToContentCard(card, iconUrl);
+  });
+}
+
+async function packApplyModUpdates() {
+  if (!packPagePack || !packPagePendingUpdates.length || packPageUpdatesApplying || packPageUpdatesChecking) return;
+  packPageUpdatesApplying = true;
+  syncPackUpdateButtons();
+  setPackUpdateStatusText(t('pack.content.updates.applying'));
+  try {
+    const result = await px.modrinth.applyInstanceUpdates({
+      packId: packPagePack.id,
+      updates: packPagePendingUpdates,
+    });
+    if (!result?.ok) throw new Error(result?.error || t('error.unknown'));
+    const updated = Math.max(0, Number(result.updated || 0));
+    const failedCount = Array.isArray(result.failed) ? result.failed.length : 0;
+    notify(t('pack.content.updates.done', { n: updated }), 'success', 2200);
+    if (failedCount > 0) notify(t('pack.content.updates.failed', { n: failedCount }), 'error', 3000);
+
+    packPageFiles = await loadPackContentFiles(packPagePack.id);
+    await packCheckModUpdates();
+    packRenderContent();
+  } catch (e) {
+    setPackUpdateStatusText((e && e.message) ? e.message : t('error.unknown'));
+    notifyError(e?.message || t('error.unknown'));
+  } finally {
+    packPageUpdatesApplying = false;
+    syncPackUpdateButtons();
+  }
+}
+
+$('pack-content-refresh-updates')?.addEventListener('click', () => {
+  packCheckModUpdates().catch(() => {});
+});
+$('pack-content-apply-updates')?.addEventListener('click', () => {
+  packApplyModUpdates().catch(() => {});
+});
 
 function packRenderContent() {
   const search = ($('pack-content-search').value || '').toLowerCase().trim();
@@ -1049,6 +1437,23 @@ function packRenderContent() {
     if (search && !viewName.includes(search) && !fileName.includes(search)) return false;
     return true;
   });
+  shown.sort((a, b) => {
+    const aName = String(a.prettyName || a.name || a.filename || '');
+    const bName = String(b.prettyName || b.name || b.filename || '');
+    const aMtime = Number(a.mtimeMs || 0);
+    const bMtime = Number(b.mtimeMs || 0);
+    switch (packPageSort) {
+      case 'alpha-desc':
+        return NAME_COLLATOR.compare(bName, aName);
+      case 'recent':
+        return (bMtime - aMtime) || NAME_COLLATOR.compare(aName, bName);
+      case 'oldest':
+        return (aMtime - bMtime) || NAME_COLLATOR.compare(aName, bName);
+      case 'alpha-asc':
+      default:
+        return NAME_COLLATOR.compare(aName, bName);
+    }
+  });
 
   // Stats
   const counts = {};
@@ -1057,7 +1462,6 @@ function packRenderContent() {
     mod: t('pack.content.stats.mod'),
     shader: t('pack.content.stats.shader'),
     resourcepack: t('pack.content.stats.resourcepack'),
-    config: t('pack.content.stats.config'),
     other: t('pack.content.stats.other'),
   };
   $('pack-content-stats').innerHTML = Object.entries(counts)
@@ -1075,16 +1479,66 @@ function packRenderContent() {
     const label = TYPE_LABELS_PP[f.type] || '?';
     const size = f.size ? formatBytes(f.size) : '';
     const modAttr = f.type === 'mod' ? ` data-modname="${esc(f.prettyName||f.name)}" data-modfile="${esc(f.filename||f.name)}"` : '';
-    return `<div class="pp-content-card"${modAttr}>
-<div class="pp-content-icon" style="background:${color}22;color:${color}">${label}</div>
+    const iconAttr = ` data-iconquery="${esc(f.prettyName||f.name||f.filename||'')}" data-icontype="${esc(f.type||'mod')}" data-projectid="${esc(f.modrinthProjectId||'')}"`;
+    const iconUrl = String(f.modrinthIconUrl || '').trim();
+    const iconHtml = iconUrl
+      ? `<img src="${esc(iconUrl)}" alt="" class="mod-content-icon-img">`
+      : `${label}`;
+    const hasUpdate = f.type === 'mod' && packPagePendingUpdateByFile.has(String(f.filename || ''));
+    const canDelete = ['mod', 'shader', 'resourcepack'].includes(String(f.type || ''));
+    const delBtn = canDelete
+      ? `<button class="pp-content-del" type="button" data-content-delete="1" data-dir="${esc(f.dir||'')}" data-filename="${esc(f.filename||'')}" title="${esc(t('pack.content.delete_btn'))}" aria-label="${esc(t('pack.content.delete_btn'))}">
+<svg viewBox="0 0 14 14" fill="none"><path d="M2 3.5h10M5 3.5V2.5h4v1M3 3.5l.8 8h6.4l.8-8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+</button>`
+      : '';
+    return `<div class="pp-content-card${hasUpdate ? ' has-update' : ''}"${modAttr}${iconAttr}>
+<div class="pp-content-icon" style="background:${color}22;color:${color}">${iconHtml}</div>
 <div class="pp-content-main">
-<div class="pp-content-name" title="${esc(f.prettyName||f.name)}">${esc(f.prettyName||f.name)}</div>
+<div class="pp-content-name" title="${esc(f.prettyName||f.name)}">${esc(f.prettyName||f.name)}${hasUpdate ? ` <span class="pp-content-update-tag">${esc(t('pack.content.updates.badge'))}</span>` : ''}</div>
 ${f.filename && f.filename !== (f.prettyName||f.name) ? `<div class="pp-content-meta">${esc(f.filename)}${size ? ' · ' + size : ''}</div>` : size ? `<div class="pp-content-meta">${size}</div>` : ''}
-</div></div>`;
+</div>${delBtn}</div>`;
   }).join('');
 
+  enrichContentIcons(grid);
   if (shown.some(f => f.type === 'mod')) enrichModIcons(grid);
 }
+
+const packContentGridEl = $('pack-content-grid');
+packContentGridEl?.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-content-delete="1"]');
+  if (!btn || !packContentGridEl.contains(btn)) return;
+  e.stopPropagation();
+  if (!packPagePack) return;
+  const dir = String(btn.dataset.dir || '');
+  const filename = String(btn.dataset.filename || '');
+  if (!dir || !filename) return;
+
+  const ok = await showConfirmDialog({
+    title: t('dialog.confirm_title'),
+    message: t('pack.content.delete_confirm', { name: filename }),
+    confirmText: t('dialog.delete'),
+    cancelText: t('dialog.cancel'),
+    danger: true,
+  });
+  if (!ok) return;
+
+  btn.disabled = true;
+  const result = await px.modpack.deleteContentFile({
+    packId: packPagePack.id,
+    dir,
+    filename,
+  });
+  btn.disabled = false;
+  if (!result?.ok) {
+    notifyError(result?.error || t('error.unknown'));
+    return;
+  }
+
+  packPageFiles = await loadPackContentFiles(packPagePack.id);
+  packRenderContent();
+  packCheckModUpdates().catch(() => {});
+  notify(t('pack.content.delete_done'),'success',1800);
+});
 
 $('pack-resolve-btn').addEventListener('click', async function() {
   if (!packPagePack) return;
@@ -1094,8 +1548,7 @@ $('pack-resolve-btn').addEventListener('click', async function() {
   if (result.ok) {
     this.textContent = result.resolved > 0 ? t('pack.content.resolve_done',{n:result.resolved}) : t('pack.content.resolve_uptodate');
     this.style.color = 'var(--green)'; this.style.borderColor = 'var(--green)';
-    const files = await px.config.get('__instanceFiles__:' + packPagePack.id);
-    if (Array.isArray(files)) packPageFiles = preprocessInstanceFiles(files);
+    packPageFiles = await loadPackContentFiles(packPagePack.id);
     packRenderContent();
     setTimeout(() => { $('pack-resolve-row').style.display = 'none'; }, 2000);
   } else {
@@ -1198,19 +1651,19 @@ function updatePackRamWarning(ramGB) {
   if (!_systemRamGB || _systemRamGB === 0) { warn.style.display = 'none'; return; }
   if (!ramGB || ramGB <= 0) { warn.style.display = 'none'; return; }
   const ratio = ramGB / _systemRamGB;
-  const leftGB = (_systemRamGB - ramGB).toFixed(1);
+  const leftMB = gbToMB(_systemRamGB - ramGB);
   if (ratio >= 0.9) {
     warn.style.display = 'block';
     warn.style.background = 'rgba(244,63,94,.1)';
     warn.style.borderColor = 'rgba(244,63,94,.4)';
     warn.style.color = 'var(--red)';
-    warn.textContent = t('pack.settings.ram_warning_high', { left: leftGB });
+    warn.textContent = t('pack.settings.ram_warning_high', { left: leftMB });
   } else if (ratio >= 0.75) {
     warn.style.display = 'block';
     warn.style.background = 'rgba(245,158,11,.1)';
     warn.style.borderColor = 'rgba(245,158,11,.3)';
     warn.style.color = 'var(--orange)';
-    warn.textContent = t('pack.settings.ram_warning_medium', { left: leftGB });
+    warn.textContent = t('pack.settings.ram_warning_medium', { left: leftMB });
   } else {
     warn.style.display = 'none';
   }
@@ -1221,7 +1674,7 @@ $('pack-ram').addEventListener('input', function() {
   const raw = parseInt(this.value, 10) || 0;
   const safe = Math.max(0, Math.min(raw, max));
   if (safe !== raw) this.value = String(safe);
-  $('pack-ram-val').textContent = safe > 0 ? safe + ' GB' : t('pack.settings.ram_global');
+  $('pack-ram-val').textContent = safe > 0 ? formatRamMB(safe) : t('pack.settings.ram_global');
   updatePackRamWarning(safe);
 });
 
@@ -1258,6 +1711,29 @@ function updatePackIconPreview(pack) {
   }
 }
 
+$('pack-unlock-instance-btn')?.addEventListener('click', async function() {
+  if (!packPagePack || !packPagePack.contentLocked) return;
+  const ok = await showConfirmDialog({
+    title: t('dialog.confirm_title'),
+    message: t('pack.settings.unlock_confirm'),
+    confirmText: t('pack.settings.unlock_instance'),
+    cancelText: t('dialog.cancel'),
+    danger: true,
+  });
+  if (!ok) return;
+  this.disabled = true;
+  const updated = await px.library.update(packPagePack.id, { contentLocked: false, lockSource: '' });
+  this.disabled = false;
+  if (!updated) {
+    notifyError(t('error.unknown'));
+    return;
+  }
+  packPagePack = { ...packPagePack, ...updated };
+  refreshPackContentLockUi();
+  await loadLibrary();
+  notify(t('pack.settings.unlock_done'), 'success', 2200);
+});
+
 $('pack-save-settings').addEventListener('click', async function() {
   if (!packPagePack) return;
   this.disabled = true;
@@ -1273,6 +1749,7 @@ $('pack-save-settings').addEventListener('click', async function() {
       return Math.max(0, Math.min(value, max));
     })(),
     fullscreen: $('pack-fullscreen').checked,
+    useGlobalResolution,
     windowWidth: useGlobalResolution ? null : (() => {
       const v = parseInt($('pack-width').value, 10);
       const safe = Number.isFinite(v) ? v : globalRes.width;
@@ -1377,7 +1854,7 @@ px.on('auth:device-code',(data={})=>{
     if (pendingHint) pendingHint.textContent = t('auth.device_code_hint');
     const copyBtn = $('btn-copy-device-code');
     if (copyBtn) {
-      copyBtn.style.display = 'inline-block';
+      copyBtn.style.display = 'inline-flex';
       copyBtn.dataset.code = code;
       copyBtn.textContent = t('auth.copy_code');
     }
@@ -1548,6 +2025,58 @@ function applySettingsI18nOverrides(){
   }
 }
 
+async function launchPackFromLibraryCard(pack, triggerBtn = null) {
+  if (!pack || !pack.id) return;
+  if (runningGamePackId) {
+    notify(t('status.running'), 'info', 1800);
+    return;
+  }
+
+  const originalHtml = triggerBtn ? triggerBtn.innerHTML : '';
+  if (triggerBtn) {
+    triggerBtn.disabled = true;
+    triggerBtn.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:2px;display:inline-block"></div>';
+  }
+
+  const result = await px.game.launch(pack.id);
+  if (!result?.ok) {
+    if (triggerBtn) {
+      triggerBtn.disabled = false;
+      triggerBtn.innerHTML = originalHtml;
+    }
+    notifyError(result?.error || t('error.unknown'));
+    return;
+  }
+
+  runningGamePackId = pack.id;
+  runningGamePid = result.pid || null;
+  isGameRunning = true;
+  syncPlayPanelControls();
+  syncPackHeroControls();
+  notify(t('status.minecraft_launched', { pid: result.pid || '?' }), 'success', 1800);
+
+  if (cardGameCloseCb) {
+    px.off('game:closed', cardGameCloseCb);
+    cardGameCloseCb = null;
+  }
+  cardGameCloseCb = ({ code }) => {
+    runningGamePackId = null;
+    runningGamePid = null;
+    isGameRunning = false;
+    syncPlayPanelControls();
+    syncPackHeroControls();
+    loadLibrary();
+    notify(t('status.stopped_code', { code }), 'info', 1800);
+    if (cardGameCloseCb) {
+      px.off('game:closed', cardGameCloseCb);
+      cardGameCloseCb = null;
+    }
+  };
+  px.on('game:closed', cardGameCloseCb);
+
+  await loadLibrary();
+}
+
 function ensureRpcCardInLauncherSettings(){
   const pane = $('settings-pane-updates');
   if (!pane) return;
@@ -1671,19 +2200,19 @@ async function loadSettings(){
     const info = await px.system.ram();
     _systemRamGB = info.totalGB;
     $('inp-ram').max = Math.max(4, Math.floor(_systemRamGB));
-    $('ram-system-info').textContent = t('settings.ram_system',{n:_systemRamGB});
+    $('ram-system-info').textContent = t('settings.ram_system',{n:gbToMB(_systemRamGB)});
     const packRamInput = $('pack-ram');
     if (packRamInput) {
       packRamInput.max = Math.max(1, Math.floor(_systemRamGB));
       const packRamSystemInfo = $('pack-ram-system-info');
-      if (packRamSystemInfo) packRamSystemInfo.textContent = t('pack.settings.ram_system', { n: _systemRamGB });
+	      if (packRamSystemInfo) packRamSystemInfo.textContent = t('pack.settings.ram_system', { n: gbToMB(_systemRamGB) });
     }
   } catch {}
 
   const defaults = cfg.instanceDefaults || {};
   const savedRam = defaults.ram || cfg.ram || 4;
   $('inp-ram').value = savedRam;
-  $('ram-val').textContent = savedRam + ' GB';
+  $('ram-val').textContent = formatRamMB(savedRam);
   updateRamWarning(savedRam);
 
   $('inp-username').value=cfg.username||'';$('inp-force-offline').checked=cfg.forceOffline||false;$('inp-cf-key').value=cfg.cfApiKey||'';
@@ -1709,19 +2238,19 @@ function updateRamWarning(ramGB) {
   if (!warn) return;
   if (!_systemRamGB || _systemRamGB === 0) { warn.style.display='none'; return; }
   const ratio = ramGB / _systemRamGB;
-  const leftGB = (_systemRamGB - ramGB).toFixed(1);
+  const leftMB = gbToMB(_systemRamGB - ramGB);
   if (ratio >= 0.9) {
     warn.style.display='block';
     warn.style.background='rgba(244,63,94,.1)';
     warn.style.borderColor='rgba(244,63,94,.4)';
     warn.style.color='var(--red)';
-    warn.textContent=t('settings.ram_warning_high',{left:leftGB});
+    warn.textContent=t('settings.ram_warning_high',{left:leftMB});
   } else if (ratio >= 0.75) {
     warn.style.display='block';
     warn.style.background='rgba(245,158,11,.1)';
     warn.style.borderColor='rgba(245,158,11,.3)';
     warn.style.color='var(--orange)';
-    warn.textContent=t('settings.ram_warning_medium',{left:leftGB});
+    warn.textContent=t('settings.ram_warning_medium',{left:leftMB});
   } else {
     warn.style.display='none';
   }
@@ -1729,7 +2258,7 @@ function updateRamWarning(ramGB) {
 
 $('inp-ram').addEventListener('input',function(){
   const v = parseInt(this.value);
-  $('ram-val').textContent = v + ' GB';
+  $('ram-val').textContent = formatRamMB(v);
   updateRamWarning(v);
 });
 async function saveAllSettings(){
@@ -1793,10 +2322,9 @@ $('inp-language')?.addEventListener('change',()=>{
   applySettingsI18nOverrides();
   // Re-render dynamic content
   renderLibrary(allPacks);
-  if(currentPack)openPlayPanel(currentPack);
   updateRamWarning(parseInt($('inp-ram').value)||4);
   const ramSI=$('ram-system-info');
-  if(ramSI&&_systemRamGB)ramSI.textContent=t('settings.ram_system',{n:_systemRamGB});
+  if(ramSI&&_systemRamGB)ramSI.textContent=t('settings.ram_system',{n:gbToMB(_systemRamGB)});
   const packRamInput = $('pack-ram');
   const packRamVal = $('pack-ram-val');
   if (packRamInput && packRamVal) {
@@ -1804,13 +2332,14 @@ $('inp-language')?.addEventListener('change',()=>{
     packRamInput.max = max;
     const safe = Math.max(0, Math.min(parseInt(packRamInput.value, 10) || 0, max));
     packRamInput.value = String(safe);
-    packRamVal.textContent = safe > 0 ? safe + ' GB' : t('pack.settings.ram_global');
+    packRamVal.textContent = safe > 0 ? formatRamMB(safe) : t('pack.settings.ram_global');
     const packRamSystemInfo = $('pack-ram-system-info');
     if (packRamSystemInfo && _systemRamGB) {
-      packRamSystemInfo.textContent = t('pack.settings.ram_system', { n: _systemRamGB });
+      packRamSystemInfo.textContent = t('pack.settings.ram_system', { n: gbToMB(_systemRamGB) });
     }
     updatePackRamWarning(safe);
   }
+  refreshPackContentLockUi();
   renderUpdateState(_lastUpdateState);
   refreshJavaInstallations().catch(()=>{});
   refreshResourceInfo().catch(()=>{});
@@ -1939,6 +2468,10 @@ function setMrSelectValue(selectId, value) {
 
 async function openBrowseForInstance(pack) {
   if (!pack) return;
+  if (pack.contentLocked) {
+    await showLockedContentWarning(pack.customName || pack.name);
+    return;
+  }
   const loaderFilter = mapInstanceLoaderToMrLoader(pack.modloader);
   const targetType = loaderFilter ? 'mod' : 'resourcepack';
 
@@ -1946,7 +2479,7 @@ async function openBrowseForInstance(pack) {
   showPage('browse');
   mrState.targetInstanceId = pack.id || '';
   mrState.query = '';
-  mrState.version = String(pack.mcVersion || '');
+  mrState.version = targetType === 'resourcepack' ? '' : String(pack.mcVersion || '');
   mrState.loader = loaderFilter;
   mrState.page = 0;
   mrState.installedByType = null;
@@ -2085,19 +2618,6 @@ ${quickAddBtn}
   $('mr-grid').querySelectorAll('.mr-icon-img').forEach(img=>{
     img.addEventListener('error',()=>{img.style.display='none';},{once:true});
   });
-
-  $('mr-grid').querySelectorAll('.mr-card-add[data-mrquick="1"]').forEach(btn=>{
-    btn.addEventListener('click',async(e)=>{
-      e.stopPropagation();
-      if (btn.dataset.installed === '1') return;
-      await quickAddFromMrCard(btn);
-    });
-  });
-
-  $('mr-grid').querySelectorAll('[data-project]').forEach(card=>{
-    if (card.dataset.installed === '1') return;
-    card.addEventListener('click',()=>openMrDetail(card.dataset.project));
-  });
 }
 
 function pickPreferredMrVersion(versions, projectType) {
@@ -2107,6 +2627,7 @@ function pickPreferredMrVersion(versions, projectType) {
   const desiredMc = String(mrState.version || '');
   const desiredLoader = String(mrState.loader || '').toLowerCase();
   const loaderAgnostic = isLoaderAgnosticType(projectType);
+  const resourcePackType = isResourcePackType(projectType);
 
   const scored = list.map(v => {
     let score = 0;
@@ -2114,7 +2635,7 @@ function pickPreferredMrVersion(versions, projectType) {
     const loaders = (v.loaders || []).map(l => String(l).toLowerCase());
     const vType = String(v.version_type || '').toLowerCase();
 
-    if (desiredMc) score += mcVersions.includes(desiredMc) ? 1000 : -220;
+    if (desiredMc && !resourcePackType) score += mcVersions.includes(desiredMc) ? 1000 : -220;
     if (desiredLoader && !loaderAgnostic) score += loaders.includes(desiredLoader) ? 500 : -140;
     if (vType === 'release') score += 60;
     else if (vType === 'beta') score += 30;
@@ -2179,13 +2700,43 @@ function renderMrPagination(){
   html+=`<button class="mr-page-btn" id="mr-next" ${page>=pages-1?'disabled':''}>›</button>`;
   html+=`<span class="mr-page-info">${page*limit+1}–${Math.min((page+1)*limit,total)} / ${fmt(total)}</span>`;
   $('mr-pagination').innerHTML=html;
-
-  $('mr-pagination').querySelectorAll('[data-p]').forEach(btn=>{
-    btn.addEventListener('click',()=>{mrState.page=parseInt(btn.dataset.p);mrSearch();$('page-browse').scrollTop=0;});
-  });
-  $('mr-prev')?.addEventListener('click',()=>{if(mrState.page>0){mrState.page--;mrSearch();}});
-  $('mr-next')?.addEventListener('click',()=>{mrState.page++;mrSearch();});
 }
+
+const mrGridEl = $('mr-grid');
+mrGridEl?.addEventListener('click',async(e)=>{
+  const quickBtn=e.target.closest('.mr-card-add[data-mrquick="1"]');
+  if(quickBtn&&mrGridEl.contains(quickBtn)){
+    e.stopPropagation();
+    if(quickBtn.dataset.installed==='1')return;
+    await quickAddFromMrCard(quickBtn);
+    return;
+  }
+  const card=e.target.closest('[data-project]');
+  if(!card||!mrGridEl.contains(card))return;
+  if(card.dataset.installed==='1')return;
+  openMrDetail(card.dataset.project);
+});
+
+const mrPaginationEl = $('mr-pagination');
+mrPaginationEl?.addEventListener('click',(e)=>{
+  const btn=e.target.closest('button');
+  if(!btn||!mrPaginationEl.contains(btn))return;
+  if(btn.id==='mr-prev'){
+    if(mrState.page>0){mrState.page--;mrSearch();}
+    return;
+  }
+  if(btn.id==='mr-next'){
+    mrState.page++;
+    mrSearch();
+    return;
+  }
+  const p=btn.dataset.p;
+  if(typeof p==='string'){
+    mrState.page=parseInt(p,10)||0;
+    mrSearch();
+    $('page-browse').scrollTop=0;
+  }
+});
 
 // Project detail
 async function openMrDetail(projectId){
@@ -2276,12 +2827,14 @@ ${versionsSection}
 
   // Version filter logic
   function filterDetailVersions() {
+    const projectType = String(project.project_type || mrState.type || '').toLowerCase();
+    const resourcePackType = isResourcePackType(projectType);
     const mcv = $('mr-dv-mc')?.value||'';
     const ldr = $('mr-dv-loader')?.value||'';
     $('mr-dv-list')?.querySelectorAll('.mr-version-item').forEach(row=>{
       const rowMcv = row.dataset.mcv||'';
       const rowLdr = row.dataset.loader||'';
-      const okMc = !mcv || rowMcv.split(',').includes(mcv);
+      const okMc = resourcePackType || !mcv || rowMcv.split(',').includes(mcv);
       const okLdr = !ldr || rowLdr.split(',').includes(ldr);
       row.style.display = okMc && okLdr ? '' : 'none';
     });
@@ -2316,7 +2869,7 @@ async function handleModpackDownload(btn) {
   const destDir  = dataPath ? dataPath+'/downloads' : '.';
   const result   = await px.modrinth.download({
     projectId: btn.dataset.pid, versionId: btn.dataset.vid,
-    fileName: btn.dataset.fname, destDir,
+    fileName: btn.dataset.fname, destDir, withDependencies: false,
   });
   if (result.ok) {
     btn.innerHTML=t('mr.downloaded'); btn.style.background='var(--green)';
@@ -2325,7 +2878,7 @@ async function handleModpackDownload(btn) {
       isInstalling = true;
       openInstallModal(result.path);
       try {
-        const r = await px.modpack.import({ filePath: result.path, cleanupSource: true });
+        const r = await px.modpack.import({ filePath: result.path, cleanupSource: true, lockOfficial: true });
         if (!r.ok) {
           showModalError(r.error);
         } else {
@@ -2375,8 +2928,14 @@ function isLoaderAgnosticType(projectType) {
     type === 'shader' || type === 'shaderpack' || type === 'datapack';
 }
 
+function isResourcePackType(projectType) {
+  const type = (projectType || '').toLowerCase();
+  return type === 'resourcepack' || type === 'resource_pack' || type === 'texturepack';
+}
+
 function isVersionCompatible(entry, versionObj, projectType) {
   const loaderAgnostic = isLoaderAgnosticType(projectType);
+  const resourcePackType = isResourcePackType(projectType);
   if (!versionObj) {
     return loaderAgnostic
       ? { ok: true }
@@ -2387,7 +2946,7 @@ function isVersionCompatible(entry, versionObj, projectType) {
   const vLoaders    = versionObj.loaders || [];
 
   // MC version check
-  const mcOk = !vMcVersions.length || vMcVersions.includes(entry.mcVersion);
+  const mcOk = resourcePackType || !vMcVersions.length || vMcVersions.includes(entry.mcVersion);
 
   // Loader check only applies to mods/plugins. Resource packs, shaders and datapacks are loader-agnostic.
   const entryLoader = (entry.modloader || '').toLowerCase();
@@ -2416,10 +2975,15 @@ async function handleContentDownload(btn, project, versionObj, projectType, opti
   }
 
   // Annotate each instance with compatibility
-  const annotated = instances.map(inst => ({
-    ...inst,
-    compat: isVersionCompatible(inst, versionObj, projectType),
-  }));
+  const annotated = instances.map(inst => {
+    const locked = !!inst.contentLocked;
+    return {
+      ...inst,
+      compat: locked
+        ? { ok: false, reason: t('inst_pick.locked') }
+        : isVersionCompatible(inst, versionObj, projectType),
+    };
+  });
 
   let compatible   = annotated.filter(i => i.compat.ok);
   const incompatible = annotated.filter(i => !i.compat.ok);
@@ -2503,7 +3067,7 @@ async function handleContentDownload(btn, project, versionObj, projectType, opti
       }
 
       const destDir = card.dataset.gamedir + '/' + card.dataset.subdir;
-      const selectedPack = allPacks.find(p => p.id === card.dataset.id);
+      const selectedPack = getPackById(card.dataset.id);
       const instName = selectedPack?.customName || selectedPack?.name || card.dataset.id;
       const effectiveProjectId = project?.id || btn.dataset.pid;
       const effectiveVersionId = versionObj?.id || btn.dataset.vid;
@@ -2514,10 +3078,14 @@ async function handleContentDownload(btn, project, versionObj, projectType, opti
         versionId: effectiveVersionId,
         fileName:  effectiveFileName,
         destDir,
+        withDependencies: true,
       });
 
       if (result.ok) {
         markMrContentInstalled(project, projectType, effectiveFileName);
+        await loadMrInstalledContentForTarget(card.dataset.id);
+        mrState.needsRefresh = true;
+        mrSearch();
         if (compactButton) {
           btn.classList.remove('loading');
           btn.disabled = true;
@@ -2538,7 +3106,11 @@ async function handleContentDownload(btn, project, versionObj, projectType, opti
         } else {
           btn.innerHTML = '<svg viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6l3 3 3-3" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 11h10" stroke-linecap="round"/></svg> '+t('mr.retry');
         }
-        notifyError(result.error);
+        const mappedError = mapModrinthDownloadError(result.error, instName);
+        notifyError(mappedError);
+        if (String(result.error || '').trim() === 'INSTANCE_CONTENT_LOCKED' && packPagePack?.id === selectedPack?.id) {
+          await showLockedContentWarning(selectedPack.customName || selectedPack.name);
+        }
       }
     });
   });
@@ -2549,7 +3121,12 @@ $('mr-detail-overlay').addEventListener('click',e=>{if(e.target===$('mr-detail-o
 $('inst-pick-close').addEventListener('click',()=>{$('inst-pick-overlay').style.display='none';});
 $('inst-pick-cancel').addEventListener('click',()=>{$('inst-pick-overlay').style.display='none';});
 $('inst-pick-overlay').addEventListener('click',e=>{if(e.target===$('inst-pick-overlay'))$('inst-pick-overlay').style.display='none';});
-$('modal-overlay').addEventListener('click',e=>{if(e.target===$('modal-overlay'))$('modal-overlay').style.display='none';});
+$('modal-overlay').addEventListener('click',e=>{
+  if(e.target!==$('modal-overlay'))return;
+  if(isInstalling)minimizeInstallModalUi();
+  else if(installSession.active)dismissInstallModalUi();
+  else $('modal-overlay').style.display='none';
+});
 $('confirm-ok')?.addEventListener('click',()=>closeConfirmDialog(true));
 $('confirm-cancel')?.addEventListener('click',()=>closeConfirmDialog(false));
 $('confirm-close')?.addEventListener('click',()=>closeConfirmDialog(false));
@@ -2562,7 +3139,16 @@ document.addEventListener('keydown',e=>{
 px.on('install:progress',({step,pct,detail})=>updateStep(step,pct,detail));
 px.on('install:log',msg=>appendLog(msg));
 px.on('install:error',msg=>showModalError(msg));
-px.on('install:done',()=>{updateStep('done',100,t('install.done'));$('modal-close-btn').style.display='block';});
+px.on('install:done',()=>{
+  updateStep('done',100,t('install.done'));
+  installSession.active=true;
+  installSession.error=false;
+  installSession.errorMsg='';
+  installSession.lastDetail=t('install.done');
+  installSession.lastPct=100;
+  $('modal-close-btn').style.display='block';
+  updateInstallMini();
+});
 px.on('updates:status',state=>renderUpdateState(state));
 
 // ── Icon fetch after import ───────────────────────────────────────────────────
@@ -2705,11 +3291,16 @@ $('ci-create').addEventListener('click', async () => {
 
   $('create-instance-overlay').style.display = 'none';
   isInstalling = true;
+  installSession.active=true;
+  installSession.error=false;
+  installSession.errorMsg='';
+  installSession.lastDetail=t('install.preparing');
+  installSession.lastPct=0;
   $('modal-title').textContent = t('create.modal_title',{name});
   $('modal-log').innerHTML = '';
   $('modal-close-btn').style.display = 'none';
   STEPS.forEach(s=>{$('istep-'+s)?.setAttribute('class','istep');const d=$('istep-'+s+'-detail');if(d)d.textContent=t('install.preparing');const p=$('istep-'+s+'-pct');if(p)p.textContent='';});
-  $('modal-overlay').style.display = 'flex';
+  showInstallModalUi();
 
   const result = await px.instance.create({
     name,
