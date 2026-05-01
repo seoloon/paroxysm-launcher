@@ -17,20 +17,41 @@ class ModpackParser {
   static async parse(filePath, log = () => {}) {
     log(`Lecture de l'archive: ${path.basename(filePath)}`);
 
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`Archive introuvable: ${filePath}`);
+    }
+    if (!isLikelyZip(filePath)) {
+      throw new Error(
+        `Archive invalide: "${path.basename(filePath)}" n'est pas un ZIP/.mrpack valide ` +
+        `(signature PK manquante).`
+      );
+    }
+
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'paroxysm-'));
+    try {
+      await extract(filePath, { dir: tmpDir });
+      log('Archive extraite');
 
-    await extract(filePath, { dir: tmpDir });
-    log('Archive extraite');
+      const cfManifest = path.join(tmpDir, 'manifest.json');
+      const mrManifest = path.join(tmpDir, 'modrinth.index.json');
 
-    const cfManifest = path.join(tmpDir, 'manifest.json');
-    const mrManifest = path.join(tmpDir, 'modrinth.index.json');
+      if (fs.existsSync(cfManifest)) return ModpackParser._parseCurseForge(tmpDir, cfManifest, log);
+      if (fs.existsSync(mrManifest)) return ModpackParser._parseModrinth(tmpDir, mrManifest, log);
 
-    if (fs.existsSync(cfManifest)) return ModpackParser._parseCurseForge(tmpDir, cfManifest, log);
-    if (fs.existsSync(mrManifest)) return ModpackParser._parseModrinth(tmpDir, mrManifest, log);
-
-    throw new Error(
-      'Format inconnu: ni manifest.json (CurseForge) ni modrinth.index.json (Modrinth) trouvé.'
-    );
+      throw new Error(
+        'Format inconnu: ni manifest.json (CurseForge) ni modrinth.index.json (Modrinth) trouvé.'
+      );
+    } catch (e) {
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+      const msg = String(e?.message || '');
+      if (/end of central directory|invalid zip|invalid or unsupported zip|corrupt|bad archive/i.test(msg)) {
+        throw new Error(
+          `Archive .mrpack invalide ou incomplète (${path.basename(filePath)}). ` +
+          `Retéléchargez le modpack puis réessayez.`
+        );
+      }
+      throw e;
+    }
   }
 
   // ── CurseForge ─────────────────────────────────────────────────────────────
@@ -205,6 +226,22 @@ function extractIcon(tmpDir) {
     }
   }
   return null;
+}
+
+function isLikelyZip(filePath) {
+  try {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile() || stat.size < 4) return false;
+    const fd = fs.openSync(filePath, 'r');
+    const buf = Buffer.alloc(4);
+    fs.readSync(fd, buf, 0, 4, 0);
+    fs.closeSync(fd);
+    const sig = buf.toString('hex').toLowerCase();
+    // PK\x03\x04 (normal), PK\x05\x06 (empty), PK\x07\x08 (spanned)
+    return sig === '504b0304' || sig === '504b0506' || sig === '504b0708';
+  } catch {
+    return false;
+  }
 }
 
 // Export safeDest so installer.js can use it
