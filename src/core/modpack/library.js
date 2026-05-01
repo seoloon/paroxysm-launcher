@@ -51,7 +51,7 @@ class ModpackLibrary {
    * @param {array}  failedMods    - array of failed download items
    * @param {string} versionId     - the installed loader version ID (e.g. "1.20.1-forge-47.4.0")
    */
-  add(parsed, failedMods = [], versionId = null) {
+  add(parsed, failedMods = [], versionId = null, options = {}) {
     const sanitize = n => (n||'modpack').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9_\-. ]/g,'').replace(/\s+/g,'_').slice(0,64)||'modpack';
     const instanceDir = path.join(Store.BASE_DIR, 'instances', sanitize(parsed.name));
     const id = `${sanitize(parsed.name).toLowerCase()}_${Date.now()}`;
@@ -78,10 +78,13 @@ class ModpackLibrary {
       customName:       null,                      // user-set display name
       notes:            '',                        // user notes
       fullscreen:       null,                      // null => use defaults
+      useGlobalResolution: true,                   // true => always use global width/height
       windowWidth:      null,                      // null => use defaults
       windowHeight:     null,                      // null => use defaults
       javaArgs:         '',                        // per-instance JVM args
       envVars:          '',                        // per-instance env vars
+      contentLocked:    !!options.contentLocked,  // locked instances cannot receive extra content until unlocked
+      lockSource:       options.lockSource || '', // e.g. "browser-official"
     };
 
     const all = this._all();
@@ -103,7 +106,7 @@ class ModpackLibrary {
     const all = this._all();
     if (!all[id]) return false;
     // Only allow safe fields to be updated
-    const allowed = ['customName', 'iconData', 'ram', 'notes', 'fullscreen', 'windowWidth', 'windowHeight', 'javaArgs', 'envVars'];
+    const allowed = ['customName', 'iconData', 'ram', 'notes', 'fullscreen', 'useGlobalResolution', 'windowWidth', 'windowHeight', 'javaArgs', 'envVars', 'contentLocked', 'lockSource'];
     for (const k of allowed) {
       if (fields[k] !== undefined) all[id][k] = fields[k];
     }
