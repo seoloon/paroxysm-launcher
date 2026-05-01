@@ -21,6 +21,18 @@ function gbToMB(gb){
 function formatRamMB(gb){
   return `${gbToMB(gb)} MB`;
 }
+function hexToRgba(hex, alpha = 1){
+  const raw = String(hex || '').trim().replace('#','');
+  const a = Math.max(0, Math.min(1, Number(alpha) || 0));
+  let full = raw;
+  if (/^[0-9a-fA-F]{3}$/.test(raw)) full = raw.split('').map(ch => ch + ch).join('');
+  if (!/^[0-9a-fA-F]{6}$/.test(full)) return `rgba(100,116,139,${a})`;
+  const n = parseInt(full, 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  return `rgba(${r},${g},${b},${a})`;
+}
 function getLoaderDisplayName(loader){
   const raw = String(loader || '');
   const lower = raw.toLowerCase();
@@ -662,11 +674,12 @@ function renderOverlay(){
 
   $('co-grid').innerHTML=shown.map(f=>{
     const color=TYPE_COLORS[f.type]||TYPE_COLORS.other;
+    const tint=hexToRgba(color,0.13);
     const label=TYPE_LABELS[f.type]||'?';
     const size=f.size?formatBytes(f.size):'';
     const modAttr=f.type==='mod'?` data-modname="${esc(f.prettyName||f.name)}" data-modfile="${esc(f.filename||f.name)}"`: '';
     return `<div class="co-file-card"${modAttr}>
-<div class="co-file-icon" style="background:${color}22;color:${color}">${label}</div>
+<div class="co-file-icon" style="background:${tint};color:${color}">${label}</div>
 <div class="co-file-info">
 <div class="co-file-name" title="${esc(f.prettyName||f.name)}">${esc(f.prettyName||f.name)}</div>
 ${f.filename&&f.filename!==(f.prettyName||f.name)?`<div class="co-file-meta">${esc(f.filename)}${size?' · '+size:''}</div>`
@@ -780,10 +793,11 @@ function ppRenderFiles(){
 
   list.innerHTML=shown.map(f=>{
     const color=TYPE_COLORS[f.type]||TYPE_COLORS.other;
+    const tint=hexToRgba(color,0.13);
     const label=TYPE_LABELS[f.type]||'?';
     const size=f.size?formatBytes(f.size):'';
     return `<div class="pp-file-item">
-<div class="pp-file-icon" style="background:${color}22;color:${color}">${label}</div>
+<div class="pp-file-icon" style="background:${tint};color:${color}">${label}</div>
 <div class="pp-file-name" title="${esc(f.prettyName||f.name)}">${esc(f.prettyName||f.name)}</div>
 ${size?`<div class="pp-file-size">${size}</div>`:''}
 </div>`;
@@ -1476,6 +1490,7 @@ function packRenderContent() {
 
   grid.innerHTML = shown.map(f => {
     const color = TYPE_COLORS_PP[f.type] || TYPE_COLORS_PP.other;
+    const tint = hexToRgba(color, 0.13);
     const label = TYPE_LABELS_PP[f.type] || '?';
     const size = f.size ? formatBytes(f.size) : '';
     const modAttr = f.type === 'mod' ? ` data-modname="${esc(f.prettyName||f.name)}" data-modfile="${esc(f.filename||f.name)}"` : '';
@@ -1492,7 +1507,7 @@ function packRenderContent() {
 </button>`
       : '';
     return `<div class="pp-content-card${hasUpdate ? ' has-update' : ''}"${modAttr}${iconAttr}>
-<div class="pp-content-icon" style="background:${color}22;color:${color}">${iconHtml}</div>
+<div class="pp-content-icon" style="background:${tint};color:${color}">${iconHtml}</div>
 <div class="pp-content-main">
 <div class="pp-content-name" title="${esc(f.prettyName||f.name)}">${esc(f.prettyName||f.name)}${hasUpdate ? ` <span class="pp-content-update-tag">${esc(t('pack.content.updates.badge'))}</span>` : ''}</div>
 ${f.filename && f.filename !== (f.prettyName||f.name) ? `<div class="pp-content-meta">${esc(f.filename)}${size ? ' · ' + size : ''}</div>` : size ? `<div class="pp-content-meta">${size}</div>` : ''}
