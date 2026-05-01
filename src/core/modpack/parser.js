@@ -28,6 +28,7 @@ class ModpackParser {
     }
 
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'paroxysm-'));
+    let parsedResult = null;
     try {
       await extract(filePath, { dir: tmpDir });
       log('Archive extraite');
@@ -35,12 +36,8 @@ class ModpackParser {
       const cfManifest = path.join(tmpDir, 'manifest.json');
       const mrManifest = path.join(tmpDir, 'modrinth.index.json');
 
-      if (fs.existsSync(cfManifest)) return ModpackParser._parseCurseForge(tmpDir, cfManifest, log);
-      if (fs.existsSync(mrManifest)) return ModpackParser._parseModrinth(tmpDir, mrManifest, log);
-
-      throw new Error(
-        'Format inconnu: ni manifest.json (CurseForge) ni modrinth.index.json (Modrinth) trouvé.'
-      );
+      if (fs.existsSync(cfManifest)) parsedResult = ModpackParser._parseCurseForge(tmpDir, cfManifest, log);
+      else if (fs.existsSync(mrManifest)) parsedResult = ModpackParser._parseModrinth(tmpDir, mrManifest, log);
     } catch (e) {
       try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
       const msg = String(e?.message || '');
@@ -52,6 +49,11 @@ class ModpackParser {
       }
       throw e;
     }
+    if (parsedResult) return parsedResult;
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+    throw new Error(
+      'Format inconnu: ni manifest.json (CurseForge) ni modrinth.index.json (Modrinth) trouvé.'
+    );
   }
 
   // ── CurseForge ─────────────────────────────────────────────────────────────

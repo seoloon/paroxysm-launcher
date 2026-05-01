@@ -50,6 +50,7 @@ class ModpackLibrary {
    * @param {object} parsed        - ParsedModpack
    * @param {array}  failedMods    - array of failed download items
    * @param {string} versionId     - the installed loader version ID (e.g. "1.20.1-forge-47.4.0")
+   * @param {object} options       - optional instance flags (contentLocked, lockSource)
    */
   add(parsed, failedMods = [], versionId = null, options = {}) {
     const sanitize = n => (n||'modpack').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9_\-. ]/g,'').replace(/\s+/g,'_').slice(0,64)||'modpack';

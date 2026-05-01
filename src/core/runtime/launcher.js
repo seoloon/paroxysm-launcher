@@ -146,8 +146,10 @@ class GameLauncher {
     // --enable-native-access                : Java 21+ only
     const javaVersion = detectJavaMajorVersion(javaPath);
     const filteredJvmArgs = forgeJvmArgs.filter(arg => {
-      if (arg.startsWith('--sun-misc-unsafe-memory-access') && javaVersion < 23) return false;
-      if (arg.startsWith('--enable-native-access')          && javaVersion < 21) return false;
+      if (
+        (arg.startsWith('--sun-misc-unsafe-memory-access') && javaVersion < 23) ||
+        (arg.startsWith('--enable-native-access') && javaVersion < 21)
+      ) return false;
       return true;
     });
 
@@ -448,7 +450,7 @@ function resolveArgs(template, vars, features = {}) {
 }
 
 function substituteVars(str, vars) {
-  return String(str).replace(/\$\{[^}]+\}/g, m => vars[m] !== undefined ? vars[m] : m);
+  return String(str).replace(/\$\{[^}]+}/g, m => vars[m] !== undefined ? vars[m] : m);
 }
 
 function osName() {

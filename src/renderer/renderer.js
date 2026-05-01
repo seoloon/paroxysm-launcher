@@ -679,7 +679,7 @@ function renderOverlay(){
     const size=f.size?formatBytes(f.size):'';
     const modAttr=f.type==='mod'?` data-modname="${esc(f.prettyName||f.name)}" data-modfile="${esc(f.filename||f.name)}"`: '';
     return `<div class="co-file-card"${modAttr}>
-<div class="co-file-icon" style="background:${tint};color:${color}">${label}</div>
+<div class="co-file-icon" style="background-color:${tint};color:${color}">${label}</div>
 <div class="co-file-info">
 <div class="co-file-name" title="${esc(f.prettyName||f.name)}">${esc(f.prettyName||f.name)}</div>
 ${f.filename&&f.filename!==(f.prettyName||f.name)?`<div class="co-file-meta">${esc(f.filename)}${size?' · '+size:''}</div>`
@@ -797,7 +797,7 @@ function ppRenderFiles(){
     const label=TYPE_LABELS[f.type]||'?';
     const size=f.size?formatBytes(f.size):'';
     return `<div class="pp-file-item">
-<div class="pp-file-icon" style="background:${tint};color:${color}">${label}</div>
+<div class="pp-file-icon" style="background-color:${tint};color:${color}">${label}</div>
 <div class="pp-file-name" title="${esc(f.prettyName||f.name)}">${esc(f.prettyName||f.name)}</div>
 ${size?`<div class="pp-file-size">${size}</div>`:''}
 </div>`;
@@ -1507,7 +1507,7 @@ function packRenderContent() {
 </button>`
       : '';
     return `<div class="pp-content-card${hasUpdate ? ' has-update' : ''}"${modAttr}${iconAttr}>
-<div class="pp-content-icon" style="background:${tint};color:${color}">${iconHtml}</div>
+<div class="pp-content-icon" style="background-color:${tint};color:${color}">${iconHtml}</div>
 <div class="pp-content-main">
 <div class="pp-content-name" title="${esc(f.prettyName||f.name)}">${esc(f.prettyName||f.name)}${hasUpdate ? ` <span class="pp-content-update-tag">${esc(t('pack.content.updates.badge'))}</span>` : ''}</div>
 ${f.filename && f.filename !== (f.prettyName||f.name) ? `<div class="pp-content-meta">${esc(f.filename)}${size ? ' · ' + size : ''}</div>` : size ? `<div class="pp-content-meta">${size}</div>` : ''}
