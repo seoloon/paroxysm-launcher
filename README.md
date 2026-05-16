@@ -1,4 +1,5 @@
-# Paroxysm Launcher
+# Paroxysm Launcher (DEPRECATED)
+# MOVED TO [ANOTHER PROJECT](https://github.com/vesta-project/launcher)
 
 <p align="center">
   <img src="assets/icon.png" alt="Paroxysm Launcher Logo" width="96" />
